@@ -1,0 +1,16 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+**/build/
+/captures
+.externalNativeBuild
+.cxx
+*.apk
+*.ap_
+*.aab
+# Room schema JSON is tracked to document database evolution.
+*.jks
+*.keystore
+/keystore.properties
