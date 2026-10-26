@@ -83,4 +83,4 @@ The debug-only Profile control seeds 800 synthetic snapshots in the same databas
 
 ## Contributions
 
-Project by Jacob Patrick Noe, developed with AI collaboration. Specific implementation and debugging contributions should be recorded with the relevant changes. This package adds documentation, repository hygiene, and an explicit non-null value in one test; it preserves the application and analysis implementation supplied for review.
+Project by Jacob Patrick Noe, developed with AI-integrated workflows. Specific implementation and debugging contributions should be recorded with the relevant changes. 
