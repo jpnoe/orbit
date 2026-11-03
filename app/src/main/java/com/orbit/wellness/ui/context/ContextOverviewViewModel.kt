@@ -4,6 +4,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.orbit.wellness.data.CheckInRepository
+import com.orbit.wellness.data.local.CheckInActivityItem
+import com.orbit.wellness.data.local.CheckInContextCategory
+import com.orbit.wellness.data.local.CheckInContextWindow
+import com.orbit.wellness.data.local.CheckInWorkoutItem
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -13,6 +17,13 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
+
+private data class ContextObservation(
+    val window: CheckInContextWindow?,
+    val categories: List<CheckInContextCategory>,
+    val activityItems: List<CheckInActivityItem>,
+    val workoutItems: List<CheckInWorkoutItem>,
+)
 
 data class ContextOverviewUiState(
     val loaded: Boolean = false,
@@ -68,13 +79,14 @@ class ContextOverviewViewModel(
             )
         } else if (pending != null && checkInId == PendingCheckInSession.ID) {
             viewModelScope.launch {
-                combine(pending.activity, pending.workout, pending.usage) { _, _, _ ->
+                combine(pending.activity, pending.workout, pending.usage, pending.diet) { _, _, _, _ ->
                     ContextOverviewCopy.present(
                         window = pending.window,
                         categories = pending.categoryRows(),
                         activityItems = pending.activityItems(),
                         workoutItems = pending.workoutItems(),
                         usageItems = pending.usageItems(),
+                        meals = pending.dietMeals(),
                     )
                 }.collect { overview ->
                     _uiState.update { it.copy(loaded = true, overview = overview) }
@@ -83,18 +95,31 @@ class ContextOverviewViewModel(
         } else {
             viewModelScope.launch {
                 combine(
-                    checkInRepository.observeContextWindow(checkInId),
-                    checkInRepository.observeContextCategories(checkInId),
-                    checkInRepository.observeActivityItems(checkInId),
-                    checkInRepository.observeWorkoutItems(checkInId),
+                    combine(
+                        checkInRepository.observeContextWindow(checkInId),
+                        checkInRepository.observeContextCategories(checkInId),
+                        checkInRepository.observeActivityItems(checkInId),
+                        checkInRepository.observeWorkoutItems(checkInId),
+                    ) { window, categories, activityItems, workoutItems ->
+                        ContextObservation(window, categories, activityItems, workoutItems)
+                    },
                     checkInRepository.observeUsageItems(checkInId),
-                ) { window, categories, activityItems, workoutItems, usageItems ->
+                    checkInRepository.observeMeals(checkInId),
+                    checkInRepository.observeMealFoods(checkInId),
+                ) { observation, usageItems, meals, foods ->
+                    val foodsByMeal = foods.groupBy { it.mealId }
                     ContextOverviewCopy.present(
-                        window,
-                        categories,
-                        activityItems,
-                        workoutItems,
+                        observation.window,
+                        observation.categories,
+                        observation.activityItems,
+                        observation.workoutItems,
                         usageItems,
+                        meals.map { meal ->
+                            DietOverviewMeal(
+                                size = meal.size,
+                                foodNames = foodsByMeal[meal.id].orEmpty().map { it.foodName },
+                            )
+                        },
                     )
                 }.collect { overview ->
                     _uiState.update { it.copy(loaded = true, overview = overview) }

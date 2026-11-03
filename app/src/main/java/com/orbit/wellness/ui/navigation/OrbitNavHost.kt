@@ -56,6 +56,8 @@ import com.orbit.wellness.ui.context.ContextOverviewViewModel
 import com.orbit.wellness.ui.context.ContextRoutes
 import com.orbit.wellness.ui.context.ContextualActivityScreen
 import com.orbit.wellness.ui.context.ContextualActivityViewModel
+import com.orbit.wellness.ui.context.ContextualDietScreen
+import com.orbit.wellness.ui.context.ContextualDietViewModel
 import com.orbit.wellness.ui.context.ContextualUsageScreen
 import com.orbit.wellness.ui.context.ContextualUsageViewModel
 import com.orbit.wellness.ui.context.ContextualWorkoutScreen
@@ -304,6 +306,9 @@ fun OrbitApp(
                     onOpenUsage = {
                         navController.navigate(ContextRoutes.usage(checkInId))
                     },
+                    onOpenDiet = {
+                        navController.navigate(ContextRoutes.diet(checkInId))
+                    },
                 )
             }
             composable(
@@ -366,6 +371,28 @@ fun OrbitApp(
                     ),
                 )
                 ContextualUsageScreen(
+                    viewModel = viewModel,
+                    snackbarHostState = snackbarHostState,
+                    onBack = { navController.popBackStack() },
+                    onFinished = { navController.popBackStack() },
+                )
+            }
+            composable(
+                route = ContextRoutes.DIET,
+                arguments = listOf(
+                    navArgument(ContextRoutes.CHECK_IN_ID) { type = NavType.StringType },
+                ),
+            ) { entry ->
+                val checkInId = entry.arguments?.getString(ContextRoutes.CHECK_IN_ID).orEmpty()
+                val viewModel: ContextualDietViewModel = viewModel(
+                    factory = ContextualDietViewModel.Factory(
+                        checkInId = checkInId,
+                        checkInRepository = application.checkInRepository,
+                        dietRepository = application.dietRepository,
+                        pending = checkInViewModel.pendingSession(),
+                    ),
+                )
+                ContextualDietScreen(
                     viewModel = viewModel,
                     snackbarHostState = snackbarHostState,
                     onBack = { navController.popBackStack() },

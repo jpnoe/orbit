@@ -19,7 +19,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -202,20 +201,10 @@ fun ContextualWorkoutScreen(
                 hideKeyboard()
                 viewModel.saveWorkouts()
             },
-            enabled = !uiState.isSaving && uiState.entries.isNotEmpty(),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Save workouts")
-        }
-        OutlinedButton(
-            onClick = {
-                hideKeyboard()
-                viewModel.saveNone()
-            },
             enabled = !uiState.isSaving,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(CONTEXTUAL_WORKOUT_NONE_LABEL)
+            Text("Save workouts")
         }
     }
 

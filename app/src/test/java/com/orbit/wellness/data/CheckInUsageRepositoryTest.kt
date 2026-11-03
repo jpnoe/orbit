@@ -183,7 +183,7 @@ class CheckInUsageRepositoryTest {
             categories.first { it.category == CheckInContextCategories.WORKOUT }.status,
         )
         assertEquals(
-            CheckInContextStatus.UNREVIEWED,
+            CheckInContextStatus.NONE,
             categories.first { it.category == CheckInContextCategories.DIET }.status,
         )
     }

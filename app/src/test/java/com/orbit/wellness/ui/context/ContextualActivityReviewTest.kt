@@ -88,7 +88,7 @@ class ContextualActivityReviewTest {
             commitActivityReview(repository, "ten", selection.commitForBack())
         }
         assertTrue(runBlocking { repository.getActivityItems("ten") }.isEmpty())
-        assertEquals(CheckInContextStatus.UNREVIEWED, activityStatus(repository))
+        assertEquals(CheckInContextStatus.NONE, activityStatus(repository))
     }
 
     @Test

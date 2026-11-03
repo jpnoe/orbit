@@ -430,6 +430,43 @@ object OrbitMigrations {
         }
     }
 
+    val MIGRATION_20_21 = object : Migration(20, 21) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_in_meals (
+                    id TEXT NOT NULL,
+                    checkInId TEXT NOT NULL,
+                    size TEXT NOT NULL,
+                    sortOrder INTEGER NOT NULL,
+                    reportedAt INTEGER NOT NULL,
+                    PRIMARY KEY(id),
+                    FOREIGN KEY(checkInId) REFERENCES check_in_context_windows(checkInId) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_meals_checkInId ON check_in_meals(checkInId)",
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_in_meal_food_items (
+                    id TEXT NOT NULL,
+                    mealId TEXT NOT NULL,
+                    foodOptionId TEXT,
+                    foodName TEXT NOT NULL,
+                    sortOrder INTEGER NOT NULL,
+                    PRIMARY KEY(id),
+                    FOREIGN KEY(mealId) REFERENCES check_in_meals(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_meal_food_items_mealId ON check_in_meal_food_items(mealId)",
+            )
+        }
+    }
+
     val ALL = arrayOf(
         MIGRATION_10_11,
         MIGRATION_11_12,
@@ -441,5 +478,6 @@ object OrbitMigrations {
         MIGRATION_17_18,
         MIGRATION_18_19,
         MIGRATION_19_20,
+        MIGRATION_20_21,
     )
 }

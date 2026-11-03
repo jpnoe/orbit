@@ -6,8 +6,6 @@ import com.orbit.wellness.data.local.CheckInWorkoutItem
 import com.orbit.wellness.data.local.WorkoutOption
 import java.util.UUID
 
-internal const val CONTEXTUAL_WORKOUT_NONE_LABEL = "No workouts to report"
-
 val CONTEXTUAL_WORKOUT_DURATION_PRESETS = listOf(10, 20, 30, 45, 60, 90)
 
 data class WorkoutDraftEntry(

@@ -7,10 +7,13 @@ import com.orbit.wellness.data.local.CheckInContextCategory
 import com.orbit.wellness.data.local.CheckInContextWindow
 import com.orbit.wellness.data.local.CheckInDao
 import com.orbit.wellness.data.local.CheckInRecord
+import com.orbit.wellness.data.local.CheckInMeal
+import com.orbit.wellness.data.local.CheckInMealFoodItem
 import com.orbit.wellness.data.local.CheckInUsageItem
 import com.orbit.wellness.data.local.CheckInWorkoutItem
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 
 class InMemoryCheckInDao : CheckInDao {
@@ -24,6 +27,8 @@ class InMemoryCheckInDao : CheckInDao {
     private val activityItems = MutableStateFlow<List<CheckInActivityItem>>(emptyList())
     private val workoutItems = MutableStateFlow<List<CheckInWorkoutItem>>(emptyList())
     private val usageItems = MutableStateFlow<List<CheckInUsageItem>>(emptyList())
+    private val meals = MutableStateFlow<List<CheckInMeal>>(emptyList())
+    private val mealFoods = MutableStateFlow<List<CheckInMealFoodItem>>(emptyList())
 
     override fun observeEnabledAxes(): Flow<List<CheckInAxis>> = MutableStateFlow(emptyList())
 
@@ -56,6 +61,7 @@ class InMemoryCheckInDao : CheckInDao {
         activityItems.value = activityItems.value.filterNot { it.checkInId == checkInId }
         workoutItems.value = workoutItems.value.filterNot { it.checkInId == checkInId }
         usageItems.value = usageItems.value.filterNot { it.checkInId == checkInId }
+        deleteMealsForCheckIn(checkInId)
         if (inserted?.id == checkInId) inserted = null
     }
 
@@ -117,6 +123,8 @@ class InMemoryCheckInDao : CheckInDao {
         activityItems = activityItems.value,
         workoutItems = workoutItems.value,
         usageItems = usageItems.value,
+        meals = meals.value,
+        mealFoods = mealFoods.value,
         inserted = inserted,
     )
 
@@ -130,6 +138,8 @@ class InMemoryCheckInDao : CheckInDao {
         activityItems.value = snapshot.activityItems
         workoutItems.value = snapshot.workoutItems
         usageItems.value = snapshot.usageItems
+        meals.value = snapshot.meals
+        mealFoods.value = snapshot.mealFoods
         inserted = snapshot.inserted
     }
 
@@ -175,6 +185,43 @@ class InMemoryCheckInDao : CheckInDao {
     override suspend fun insertUsageItems(items: List<CheckInUsageItem>) {
         usageItems.value = usageItems.value + items
     }
+
+    override fun observeMeals(checkInId: String): Flow<List<CheckInMeal>> =
+        meals.map { rows -> rows.forCheckIn(checkInId) }
+
+    override suspend fun getMeals(checkInId: String): List<CheckInMeal> =
+        meals.value.forCheckIn(checkInId)
+
+    override fun observeMealFoods(checkInId: String): Flow<List<CheckInMealFoodItem>> =
+        combine(meals, mealFoods) { _, _ -> foodsFor(checkInId) }
+
+    override suspend fun getMealFoods(checkInId: String): List<CheckInMealFoodItem> =
+        foodsFor(checkInId)
+
+    override suspend fun deleteMealsForCheckIn(checkInId: String) {
+        val mealIds = meals.value.filter { it.checkInId == checkInId }.map { it.id }.toSet()
+        meals.value = meals.value.filterNot { it.checkInId == checkInId }
+        mealFoods.value = mealFoods.value.filterNot { it.mealId in mealIds }
+    }
+
+    override suspend fun insertMeals(meals: List<CheckInMeal>) {
+        this.meals.value = this.meals.value + meals
+    }
+
+    override suspend fun insertMealFoods(foods: List<CheckInMealFoodItem>) {
+        mealFoods.value = mealFoods.value + foods
+    }
+
+    private fun List<CheckInMeal>.forCheckIn(checkInId: String): List<CheckInMeal> =
+        filter { it.checkInId == checkInId }.sortedWith(compareBy<CheckInMeal> { it.sortOrder }.thenBy { it.id })
+
+    private fun foodsFor(checkInId: String): List<CheckInMealFoodItem> {
+        val orderedMeals = meals.value.forCheckIn(checkInId)
+        val rank = orderedMeals.mapIndexed { index, meal -> meal.id to index }.toMap()
+        return mealFoods.value
+            .filter { it.mealId in rank }
+            .sortedWith(compareBy<CheckInMealFoodItem> { rank.getValue(it.mealId) }.thenBy { it.sortOrder }.thenBy { it.id })
+    }
 }
 
 data class CheckInDaoSnapshot(
@@ -185,5 +232,7 @@ data class CheckInDaoSnapshot(
     val activityItems: List<CheckInActivityItem>,
     val workoutItems: List<CheckInWorkoutItem>,
     val usageItems: List<CheckInUsageItem>,
+    val meals: List<CheckInMeal>,
+    val mealFoods: List<CheckInMealFoodItem>,
     val inserted: CheckInRecord?,
 )

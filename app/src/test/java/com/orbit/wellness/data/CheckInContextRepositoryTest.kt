@@ -43,7 +43,7 @@ class CheckInContextRepositoryTest {
         assertNull(original.completedAt)
         val categories = runBlocking { repository.getContextCategories(later.record.id) }
         assertEquals(CheckInContextCategories.ALL, categories.map { it.category })
-        assertTrue(categories.all { it.status == CheckInContextStatus.UNREVIEWED && it.reviewedAt == null })
+        assertTrue(categories.all { it.status == CheckInContextStatus.NONE && it.reviewedAt == null })
 
         wakeTime = null
         runBlocking {
@@ -81,7 +81,7 @@ class CheckInContextRepositoryTest {
         assertTrue(runBlocking { repository.getActivityItems("ten") }.isEmpty())
         val others = runBlocking { repository.getContextCategories("ten") }
             .filter { it.category != CheckInContextCategories.ACTIVITY }
-        assertTrue(others.all { it.status == CheckInContextStatus.UNREVIEWED })
+        assertTrue(others.all { it.status == CheckInContextStatus.NONE })
     }
 
     @Test
@@ -172,7 +172,7 @@ class CheckInContextRepositoryTest {
         }
         assertTrue(error.message!!.contains("Duplicate"))
         assertEquals(
-            CheckInContextStatus.UNREVIEWED,
+            CheckInContextStatus.NONE,
             runBlocking { repository.getContextCategories("ten") }
                 .first { it.category == CheckInContextCategories.ACTIVITY }
                 .status,

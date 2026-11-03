@@ -17,7 +17,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -129,20 +128,10 @@ fun ContextualUsageScreen(
                 hideKeyboard()
                 viewModel.saveUsage()
             },
-            enabled = !uiState.isSaving && uiState.lines.isNotEmpty(),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(R.string.save_usage))
-        }
-        OutlinedButton(
-            onClick = {
-                hideKeyboard()
-                viewModel.saveNone()
-            },
             enabled = !uiState.isSaving,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(stringResource(R.string.no_usage_to_report))
+            Text(stringResource(R.string.save_usage))
         }
     }
 

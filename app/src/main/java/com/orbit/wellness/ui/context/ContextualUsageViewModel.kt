@@ -135,13 +135,7 @@ class ContextualUsageViewModel(
 
     fun saveUsage() {
         if (_uiState.value.isSaving || _uiState.value.missing) return
-        if (selection.snapshots().isEmpty()) return
         commit(selection.commitForSave())
-    }
-
-    fun saveNone() {
-        if (_uiState.value.isSaving || _uiState.value.missing) return
-        commit(selection.commitForNone())
     }
 
     private fun commit(commit: UsageReviewCommit) {

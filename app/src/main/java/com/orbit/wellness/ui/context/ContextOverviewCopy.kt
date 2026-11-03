@@ -20,6 +20,11 @@ data class ContextCategoryCardModel(
     val comingNext: Boolean,
 )
 
+data class DietOverviewMeal(
+    val size: String,
+    val foodNames: List<String>,
+)
+
 data class ContextOverviewModel(
     val missing: Boolean = false,
     val title: String = "",
@@ -31,7 +36,6 @@ object ContextOverviewCopy {
     const val SINCE_LAST_CHECK_IN = "Since your last check-in"
     const val SINCE_WAKING = "Since waking"
     const val SO_FAR_TODAY = "So far today"
-    const val NOT_REVIEWED = "Not reviewed"
     const val NONE = "None"
     const val COMING_NEXT = "Coming next"
     const val MISSING = "This check-in could not be found."
@@ -42,6 +46,7 @@ object ContextOverviewCopy {
         activityItems: List<CheckInActivityItem>,
         workoutItems: List<CheckInWorkoutItem> = emptyList(),
         usageItems: List<CheckInUsageItem> = emptyList(),
+        meals: List<DietOverviewMeal> = emptyList(),
         zone: ZoneId = ZoneId.systemDefault(),
     ): ContextOverviewModel {
         if (window == null) {
@@ -50,10 +55,11 @@ object ContextOverviewCopy {
         val (title, detail) = heading(window.startBasis, window.windowStartAt, zone)
         val byCategory = categories.associateBy { it.category }
         val cards = CheckInContextCategories.ALL.map { category ->
-            val status = byCategory[category]?.status ?: CheckInContextStatus.UNREVIEWED
+            val status = byCategory[category]?.status ?: CheckInContextStatus.NONE
             val interactive = category == CheckInContextCategories.ACTIVITY ||
                 category == CheckInContextCategories.WORKOUT ||
-                category == CheckInContextCategories.USAGE
+                category == CheckInContextCategories.USAGE ||
+                category == CheckInContextCategories.DIET
             ContextCategoryCardModel(
                 category = category,
                 title = categoryTitle(category),
@@ -67,6 +73,7 @@ object ContextOverviewCopy {
                         workoutItems.map { it.workoutName to it.durationMinutes },
                     )
                     CheckInContextCategories.USAGE -> usageStatusText(status, usageItems)
+                    CheckInContextCategories.DIET -> dietStatusText(status, meals)
                     else -> passiveStatusText(status)
                 },
                 interactive = interactive,
@@ -94,12 +101,12 @@ object ContextOverviewCopy {
         return when (status) {
             CheckInContextStatus.NONE -> NONE
             CheckInContextStatus.ENTRIES -> when (names.size) {
-                0 -> NOT_REVIEWED
+                0 -> NONE
                 1 -> names.first()
                 2 -> names.joinToString(", ")
                 else -> "${names.size} activities"
             }
-            else -> NOT_REVIEWED
+            else -> NONE
         }
     }
 
@@ -107,11 +114,11 @@ object ContextOverviewCopy {
         return when (status) {
             CheckInContextStatus.NONE -> NONE
             CheckInContextStatus.ENTRIES -> when (workouts.size) {
-                0 -> NOT_REVIEWED
+                0 -> NONE
                 1 -> "${workouts.first().first} · ${workouts.first().second} min"
                 else -> "${workouts.size} workouts · ${workouts.sumOf { it.second }} min"
             }
-            else -> NOT_REVIEWED
+            else -> NONE
         }
     }
 
@@ -119,7 +126,7 @@ object ContextOverviewCopy {
         return when (status) {
             CheckInContextStatus.NONE -> NONE
             CheckInContextStatus.ENTRIES -> when (items.size) {
-                0 -> NOT_REVIEWED
+                0 -> NONE
                 1 -> {
                     val item = items.first()
                     if (item.amount.isBlank()) item.name else "${item.name} · ${item.amount}"
@@ -130,7 +137,36 @@ object ContextOverviewCopy {
                     "${items.size} items · $supportive supportive · $coping coping"
                 }
             }
-            else -> NOT_REVIEWED
+            else -> NONE
+        }
+    }
+
+    fun dietStatusText(status: String, meals: List<DietOverviewMeal>): String {
+        return when (status) {
+            CheckInContextStatus.NONE -> NONE
+            CheckInContextStatus.ENTRIES -> when (meals.size) {
+                0 -> NONE
+                1 -> oneMealSummary(meals.first())
+                else -> "${meals.size} meals · ${meals.joinToString(", ") { mealSizeLabel(it.size) }}"
+            }
+            else -> NONE
+        }
+    }
+
+    fun mealSizeLabel(size: String): String = when (size) {
+        "snack" -> "Snack"
+        "small" -> "Small"
+        "medium" -> "Medium"
+        "large" -> "Large"
+        else -> size
+    }
+
+    private fun oneMealSummary(meal: DietOverviewMeal): String {
+        val size = mealSizeLabel(meal.size)
+        return when (meal.foodNames.size) {
+            0 -> "$size meal"
+            1, 2 -> "$size · ${meal.foodNames.joinToString(", ")}"
+            else -> "$size meal · ${meal.foodNames.size} foods"
         }
     }
 
@@ -138,7 +174,7 @@ object ContextOverviewCopy {
         return when (status) {
             CheckInContextStatus.NONE -> NONE
             CheckInContextStatus.ENTRIES -> "Saved"
-            else -> NOT_REVIEWED
+            else -> NONE
         }
     }
 

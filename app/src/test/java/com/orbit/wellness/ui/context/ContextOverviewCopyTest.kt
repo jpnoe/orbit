@@ -50,7 +50,7 @@ class ContextOverviewCopyTest {
     @Test
     fun categoryStatusMapsToOverviewText() {
         assertEquals(
-            ContextOverviewCopy.NOT_REVIEWED,
+            ContextOverviewCopy.NONE,
             ContextOverviewCopy.activityStatusText(CheckInContextStatus.UNREVIEWED, emptyList()),
         )
         assertEquals(
@@ -77,7 +77,7 @@ class ContextOverviewCopyTest {
     @Test
     fun workoutSummariesCoverNoneOneAndMany() {
         assertEquals(
-            ContextOverviewCopy.NOT_REVIEWED,
+            ContextOverviewCopy.NONE,
             ContextOverviewCopy.workoutStatusText(CheckInContextStatus.UNREVIEWED, emptyList()),
         )
         assertEquals(
@@ -101,7 +101,7 @@ class ContextOverviewCopyTest {
     fun usageSummariesCoverNoneOneAndIntentGroups() {
         val medication = usageItem("Medication", SubstanceIntent.SUPPORTIVE.name, "10 mg")
         assertEquals(
-            ContextOverviewCopy.NOT_REVIEWED,
+            ContextOverviewCopy.NONE,
             ContextOverviewCopy.usageStatusText(CheckInContextStatus.UNREVIEWED, emptyList()),
         )
         assertEquals(
@@ -133,7 +133,51 @@ class ContextOverviewCopyTest {
     }
 
     @Test
-    fun activityWorkoutAndUsageAreInteractiveAndDietStaysComingNext() {
+    fun dietSummariesCoverNoneOneMealAndMany() {
+        assertEquals(
+            ContextOverviewCopy.NONE,
+            ContextOverviewCopy.dietStatusText(CheckInContextStatus.UNREVIEWED, emptyList()),
+        )
+        assertEquals(
+            ContextOverviewCopy.NONE,
+            ContextOverviewCopy.dietStatusText(CheckInContextStatus.NONE, emptyList()),
+        )
+        assertEquals(
+            "Medium meal",
+            ContextOverviewCopy.dietStatusText(
+                CheckInContextStatus.ENTRIES,
+                listOf(DietOverviewMeal("medium", emptyList())),
+            ),
+        )
+        assertEquals(
+            "Medium · Rice, Chicken",
+            ContextOverviewCopy.dietStatusText(
+                CheckInContextStatus.ENTRIES,
+                listOf(DietOverviewMeal("medium", listOf("Rice", "Chicken"))),
+            ),
+        )
+        assertEquals(
+            "Large meal · 3 foods",
+            ContextOverviewCopy.dietStatusText(
+                CheckInContextStatus.ENTRIES,
+                listOf(DietOverviewMeal("large", listOf("Rice", "Chicken", "Beans"))),
+            ),
+        )
+        assertEquals(
+            "3 meals · Snack, Small, Large",
+            ContextOverviewCopy.dietStatusText(
+                CheckInContextStatus.ENTRIES,
+                listOf(
+                    DietOverviewMeal("snack", emptyList()),
+                    DietOverviewMeal("small", listOf("Yogurt")),
+                    DietOverviewMeal("large", listOf("Rice")),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun allFourContextCategoriesAreInteractive() {
         val window = CheckInContextWindow(
             checkInId = "check-in",
             previousCheckInId = null,
@@ -145,11 +189,7 @@ class ContextOverviewCopyTest {
             CheckInContextCategory(
                 checkInId = "check-in",
                 category = category,
-                status = if (category == CheckInContextCategories.DIET) {
-                    CheckInContextStatus.UNREVIEWED
-                } else {
-                    CheckInContextStatus.ENTRIES
-                },
+                status = CheckInContextStatus.ENTRIES,
             )
         }
         val overview = ContextOverviewCopy.present(
@@ -175,6 +215,7 @@ class ContextOverviewCopyTest {
             usageItems = listOf(
                 usageItem("Medication", SubstanceIntent.SUPPORTIVE.name, "10 mg"),
             ),
+            meals = listOf(DietOverviewMeal("medium", listOf("Rice", "Chicken"))),
             zone = ZoneOffset.UTC,
         )
         val activity = overview.cards.first { it.category == CheckInContextCategories.ACTIVITY }
@@ -190,9 +231,10 @@ class ContextOverviewCopyTest {
         assertFalse(usage.comingNext)
         assertEquals("Medication · 10 mg", usage.statusText)
         val diet = overview.cards.first { it.category == CheckInContextCategories.DIET }
-        assertFalse(diet.interactive)
-        assertTrue(diet.comingNext)
-        assertEquals(ContextOverviewCopy.NOT_REVIEWED, diet.statusText)
+        assertTrue(diet.interactive)
+        assertFalse(diet.comingNext)
+        assertEquals("Medium · Rice, Chicken", diet.statusText)
+        assertTrue(overview.cards.none { it.comingNext })
     }
 
     private fun usageItem(name: String, intent: String, amount: String) = CheckInUsageItem(

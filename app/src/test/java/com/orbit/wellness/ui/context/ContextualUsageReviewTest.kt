@@ -76,7 +76,7 @@ class ContextualUsageReviewTest {
         }
         assertTrue(runBlocking { repository.getUsageItems("ten") }.isEmpty())
         assertEquals(
-            CheckInContextStatus.UNREVIEWED,
+            CheckInContextStatus.NONE,
             usageStatus(repository),
         )
 
@@ -101,7 +101,7 @@ class ContextualUsageReviewTest {
             commitUsageReview(repository, "ten", draft.commitForBack())
         }
         assertTrue(runBlocking { repository.getUsageItems("ten") }.isEmpty())
-        assertEquals(CheckInContextStatus.UNREVIEWED, usageStatus(repository))
+        assertEquals(CheckInContextStatus.NONE, usageStatus(repository))
         assertEquals(listOf("Alcohol"), draft.lines.map { it.name })
     }
 

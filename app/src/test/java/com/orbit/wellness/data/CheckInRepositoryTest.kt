@@ -45,6 +45,34 @@ class CheckInRepositoryTest {
     }
 
     @Test
+    fun migration20To21IsRegistered() {
+        val migration = OrbitMigrations.ALL.single { it.startVersion == 20 && it.endVersion == 21 }
+        assertEquals(20, migration.startVersion)
+        assertEquals(21, migration.endVersion)
+    }
+
+    @Test
+    fun exportedSchema21AddsContextualMealsWithoutChangingMealEvents() {
+        val current = schemaFile("21.json").readText()
+        val previous = schemaFile("20.json").readText()
+        assertTrue(current.contains("\"version\": 21"))
+        assertEquals(createSql(previous, "meal_events"), createSql(current, "meal_events"))
+        assertEquals(createSql(previous, "meal_items"), createSql(current, "meal_items"))
+        assertEquals(createSql(previous, "check_in_usage_items"), createSql(current, "check_in_usage_items"))
+        val meals = createSql(current, "check_in_meals")
+        assertTrue(meals.contains("REFERENCES `check_in_context_windows`(`checkInId`)"))
+        assertTrue(meals.contains("ON DELETE CASCADE"))
+        assertTrue(meals.contains("`size` TEXT NOT NULL"))
+        assertTrue(meals.contains("`sortOrder` INTEGER NOT NULL"))
+        val foods = createSql(current, "check_in_meal_food_items")
+        assertTrue(foods.contains("REFERENCES `check_in_meals`(`id`)"))
+        assertTrue(foods.contains("ON DELETE CASCADE"))
+        assertTrue(foods.contains("`foodName` TEXT NOT NULL"))
+        assertTrue(foods.contains("`foodOptionId` TEXT"))
+        assertTrue(!foods.contains("food_options"))
+    }
+
+    @Test
     fun migration19To20IsRegistered() {
         val migration = OrbitMigrations.ALL.single { it.startVersion == 19 && it.endVersion == 20 }
         assertEquals(19, migration.startVersion)

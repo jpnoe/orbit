@@ -6,6 +6,8 @@ import com.orbit.wellness.data.local.CheckInAxisValue
 import com.orbit.wellness.data.local.CheckInContextCategories
 import com.orbit.wellness.data.local.CheckInContextCategory
 import com.orbit.wellness.data.local.CheckInContextStatus
+import com.orbit.wellness.data.local.CheckInMeal
+import com.orbit.wellness.data.local.CheckInMealFoodItem
 import com.orbit.wellness.data.local.CheckInContextWindow
 import com.orbit.wellness.util.DateUtils
 import com.orbit.wellness.data.local.CheckInUsageItem
@@ -70,6 +72,18 @@ class CheckInRepository(
     suspend fun getUsageItems(checkInId: String): List<CheckInUsageItem> =
         dao.getUsageItems(checkInId)
 
+    fun observeMeals(checkInId: String): Flow<List<CheckInMeal>> =
+        dao.observeMeals(checkInId)
+
+    suspend fun getMeals(checkInId: String): List<CheckInMeal> =
+        dao.getMeals(checkInId)
+
+    fun observeMealFoods(checkInId: String): Flow<List<CheckInMealFoodItem>> =
+        dao.observeMealFoods(checkInId)
+
+    suspend fun getMealFoods(checkInId: String): List<CheckInMealFoodItem> =
+        dao.getMealFoods(checkInId)
+
     suspend fun saveCheckIn(
         axisValues: List<CheckInAxisInput>,
         trigger: String,
@@ -81,12 +95,14 @@ class CheckInRepository(
         activitySelections: List<CheckInActivitySelection>? = null,
         workoutSelections: List<CheckInWorkoutSelection>? = null,
         usageSelections: List<CheckInUsageSelection>? = null,
+        mealSelections: List<CheckInMealSelection>? = null,
         completedAt: Long? = null,
     ): SavedCheckIn {
         CheckInValidator.validate(axisValues)
         activitySelections?.let { CheckInActivitySelections.validate(it, contextWindowExists = true) }
         workoutSelections?.let { CheckInWorkoutSelections.validate(it, contextWindowExists = true) }
         usageSelections?.let { CheckInUsageSelections.validate(it, contextWindowExists = true) }
+        mealSelections?.let { CheckInMealSelections.validate(it, contextWindowExists = true) }
         val normalizedTrigger = trigger.trim()
         require(normalizedTrigger.isNotBlank()) {
             "Check-in trigger must not be blank"
@@ -132,7 +148,7 @@ class CheckInRepository(
                 record = record,
                 values = rows,
                 window = window,
-                categories = CheckInContextBoundary.unreviewedCategories(record.id),
+                categories = CheckInContextBoundary.defaultCategories(record.id),
             )
             if (moodSample != null) {
                 moodSamples.insert(moodSample)
@@ -145,6 +161,9 @@ class CheckInRepository(
             }
             if (usageSelections != null) {
                 saveUsageSelections(record.id, usageSelections, recordedAt)
+            }
+            if (mealSelections != null) {
+                saveDietSelections(record.id, mealSelections, recordedAt)
             }
             if (completedAt != null) {
                 dao.completeContextIfUnset(record.id, completedAt)
@@ -297,6 +316,53 @@ class CheckInRepository(
         dao.replaceUsageSelections(
             checkInId = checkInId,
             items = items,
+            status = status,
+            reviewedAt = reportedAt,
+        )
+    }
+
+    /**
+     * Replaces contextual meals for one check-in.
+     * An empty list is an explicit "none" and does not insert a placeholder meal.
+     * Food items are replaced with their meals. This does not read or write detailed meal history.
+     */
+    suspend fun saveDietSelections(
+        checkInId: String,
+        meals: List<CheckInMealSelection>,
+        reportedAt: Long = System.currentTimeMillis(),
+    ) {
+        CheckInMealSelections.validate(
+            meals = meals,
+            contextWindowExists = dao.getContextWindow(checkInId) != null,
+        )
+        val mealRows = meals.map { meal ->
+            CheckInMeal(
+                id = meal.id,
+                checkInId = checkInId,
+                size = meal.size,
+                sortOrder = meal.sortOrder,
+                reportedAt = reportedAt,
+            )
+        }
+        val foodRows = meals.flatMap { meal ->
+            meal.foods.map { food ->
+                CheckInMealFoodItem(
+                    mealId = meal.id,
+                    foodOptionId = food.foodOptionId,
+                    foodName = food.foodName.trim(),
+                    sortOrder = food.sortOrder,
+                )
+            }
+        }
+        val status = if (mealRows.isEmpty()) {
+            CheckInContextStatus.NONE
+        } else {
+            CheckInContextStatus.ENTRIES
+        }
+        dao.replaceDietSelections(
+            checkInId = checkInId,
+            meals = mealRows,
+            foods = foodRows,
             status = status,
             reviewedAt = reportedAt,
         )

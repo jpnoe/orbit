@@ -280,4 +280,74 @@ interface CheckInDao {
             reviewedAt = reviewedAt,
         )
     }
+
+    @Query(
+        """
+        SELECT * FROM check_in_meals
+        WHERE checkInId = :checkInId
+        ORDER BY sortOrder ASC, rowid ASC
+        """,
+    )
+    fun observeMeals(checkInId: String): Flow<List<CheckInMeal>>
+
+    @Query(
+        """
+        SELECT * FROM check_in_meals
+        WHERE checkInId = :checkInId
+        ORDER BY sortOrder ASC, rowid ASC
+        """,
+    )
+    suspend fun getMeals(checkInId: String): List<CheckInMeal>
+
+    @Query(
+        """
+        SELECT food.* FROM check_in_meal_food_items AS food
+        INNER JOIN check_in_meals AS meal ON food.mealId = meal.id
+        WHERE meal.checkInId = :checkInId
+        ORDER BY meal.sortOrder ASC, food.sortOrder ASC, food.rowid ASC
+        """,
+    )
+    fun observeMealFoods(checkInId: String): Flow<List<CheckInMealFoodItem>>
+
+    @Query(
+        """
+        SELECT food.* FROM check_in_meal_food_items AS food
+        INNER JOIN check_in_meals AS meal ON food.mealId = meal.id
+        WHERE meal.checkInId = :checkInId
+        ORDER BY meal.sortOrder ASC, food.sortOrder ASC, food.rowid ASC
+        """,
+    )
+    suspend fun getMealFoods(checkInId: String): List<CheckInMealFoodItem>
+
+    @Query("DELETE FROM check_in_meals WHERE checkInId = :checkInId")
+    suspend fun deleteMealsForCheckIn(checkInId: String)
+
+    @Insert
+    suspend fun insertMeals(meals: List<CheckInMeal>)
+
+    @Insert
+    suspend fun insertMealFoods(foods: List<CheckInMealFoodItem>)
+
+    @Transaction
+    suspend fun replaceDietSelections(
+        checkInId: String,
+        meals: List<CheckInMeal>,
+        foods: List<CheckInMealFoodItem>,
+        status: String,
+        reviewedAt: Long,
+    ) {
+        deleteMealsForCheckIn(checkInId)
+        if (meals.isNotEmpty()) {
+            insertMeals(meals)
+        }
+        if (foods.isNotEmpty()) {
+            insertMealFoods(foods)
+        }
+        updateCategoryStatus(
+            checkInId = checkInId,
+            category = CheckInContextCategories.DIET,
+            status = status,
+            reviewedAt = reviewedAt,
+        )
+    }
 }

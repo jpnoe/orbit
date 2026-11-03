@@ -381,6 +381,7 @@ class CheckInViewModel(
                     activitySelections = session.activity.value,
                     workoutSelections = session.workout.value,
                     usageSelections = session.usage.value,
+                    mealSelections = session.diet.value,
                     completedAt = System.currentTimeMillis(),
                 )
                 val cacheUpdate = updateMoodCacheAfterSubmission(legacyMood?.score) { score ->

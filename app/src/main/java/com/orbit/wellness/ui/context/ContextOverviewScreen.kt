@@ -47,6 +47,7 @@ fun ContextOverviewScreen(
     onOpenActivity: () -> Unit,
     onOpenWorkout: () -> Unit,
     onOpenUsage: () -> Unit,
+    onOpenDiet: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -103,6 +104,8 @@ fun ContextOverviewScreen(
                                     onOpenWorkout
                                 card.category == CheckInContextCategories.USAGE && card.interactive ->
                                     onOpenUsage
+                                card.category == CheckInContextCategories.DIET && card.interactive ->
+                                    onOpenDiet
                                 else -> null
                             },
                             modifier = Modifier.weight(1f),

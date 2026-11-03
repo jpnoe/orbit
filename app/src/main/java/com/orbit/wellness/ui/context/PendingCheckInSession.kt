@@ -1,6 +1,7 @@
 package com.orbit.wellness.ui.context
 
 import com.orbit.wellness.data.CheckInActivitySelection
+import com.orbit.wellness.data.CheckInMealSelection
 import com.orbit.wellness.data.CheckInUsageSelection
 import com.orbit.wellness.data.CheckInWorkoutSelection
 import com.orbit.wellness.data.local.CheckInActivityItem
@@ -16,7 +17,7 @@ import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Context reports held until the overview Save writes the check-in.
- * A null list is still unreviewed. An empty list is an explicit none.
+ * A missing or empty list is none. A nonempty list is entries.
  */
 class PendingCheckInSession(
     val window: CheckInContextWindow,
@@ -30,6 +31,9 @@ class PendingCheckInSession(
     private val _usage = MutableStateFlow<List<CheckInUsageSelection>?>(null)
     val usage: StateFlow<List<CheckInUsageSelection>?> = _usage.asStateFlow()
 
+    private val _diet = MutableStateFlow<List<CheckInMealSelection>?>(null)
+    val diet: StateFlow<List<CheckInMealSelection>?> = _diet.asStateFlow()
+
     fun stageActivity(selections: List<CheckInActivitySelection>) {
         _activity.value = selections
     }
@@ -42,21 +46,26 @@ class PendingCheckInSession(
         _usage.value = selections
     }
 
+    fun stageDiet(meals: List<CheckInMealSelection>) {
+        _diet.value = meals
+    }
+
     fun categoryRows(): List<CheckInContextCategory> {
         return CheckInContextCategories.ALL.map { category ->
             val reviewed = when (category) {
                 CheckInContextCategories.ACTIVITY -> _activity.value
                 CheckInContextCategories.WORKOUT -> _workout.value
                 CheckInContextCategories.USAGE -> _usage.value
+                CheckInContextCategories.DIET -> _diet.value
                 else -> null
             }
             CheckInContextCategory(
                 checkInId = ID,
                 category = category,
-                status = when {
-                    reviewed == null -> CheckInContextStatus.UNREVIEWED
-                    reviewed.isEmpty() -> CheckInContextStatus.NONE
-                    else -> CheckInContextStatus.ENTRIES
+                status = if (reviewed.isNullOrEmpty()) {
+                    CheckInContextStatus.NONE
+                } else {
+                    CheckInContextStatus.ENTRIES
                 },
             )
         }
@@ -83,6 +92,17 @@ class PendingCheckInSession(
                 reportedAt = window.windowEndAt,
             )
         }
+    }
+
+    fun dietMeals(): List<DietOverviewMeal> {
+        return _diet.value.orEmpty()
+            .sortedBy { it.sortOrder }
+            .map { meal ->
+                DietOverviewMeal(
+                    size = meal.size,
+                    foodNames = meal.foods.sortedBy { it.sortOrder }.map { it.foodName },
+                )
+            }
     }
 
     fun usageItems(): List<CheckInUsageItem> {

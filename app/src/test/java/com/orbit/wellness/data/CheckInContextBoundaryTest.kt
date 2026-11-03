@@ -110,9 +110,9 @@ class CheckInContextBoundaryTest {
     }
 
     @Test
-    fun newWindowsStartWithFourUnreviewedCategories() {
-        val rows = CheckInContextBoundary.unreviewedCategories("check-in")
+    fun newWindowsStartWithFourNoneCategories() {
+        val rows = CheckInContextBoundary.defaultCategories("check-in")
         assertEquals(CheckInContextCategories.ALL, rows.map { it.category })
-        assertTrue(rows.all { it.status == CheckInContextStatus.UNREVIEWED && it.reviewedAt == null })
+        assertTrue(rows.all { it.status == CheckInContextStatus.NONE && it.reviewedAt == null })
     }
 }

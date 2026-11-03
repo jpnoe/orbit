@@ -50,7 +50,7 @@ class ContextCompletionTest {
         val after = runBlocking { repository.getContextCategories("ten") }
         assertEquals(before, after)
         assertEquals(CheckInContextCategories.ALL, after.map { it.category })
-        assertTrue(after.all { it.status == CheckInContextStatus.UNREVIEWED && it.reviewedAt == null })
+        assertTrue(after.all { it.status == CheckInContextStatus.NONE && it.reviewedAt == null })
     }
 
     @Test

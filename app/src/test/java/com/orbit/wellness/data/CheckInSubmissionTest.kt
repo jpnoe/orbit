@@ -5,7 +5,6 @@ import com.orbit.wellness.data.local.CheckInContextStatus
 import com.orbit.wellness.data.local.DefaultCheckInAxes
 import com.orbit.wellness.data.local.MoodSample
 import com.orbit.wellness.ui.checkin.checkInContextNavigationId
-import com.orbit.wellness.ui.context.CONTEXTUAL_ACTIVITY_NONE_LABEL
 import com.orbit.wellness.util.DateUtils
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -156,7 +155,6 @@ class CheckInSubmissionTest {
 
     @Test
     fun noActivitiesToReportKeepsTheExplicitNoneSave() {
-        assertEquals("No activities to report", CONTEXTUAL_ACTIVITY_NONE_LABEL)
         val repository = CheckInRepository(InMemoryCheckInDao())
         runBlocking {
             repository.saveCheckIn(
@@ -247,11 +245,11 @@ class CheckInSubmissionTest {
             categories.first { it.category == CheckInContextCategories.WORKOUT }.status,
         )
         assertEquals(
-            CheckInContextStatus.UNREVIEWED,
+            CheckInContextStatus.NONE,
             categories.first { it.category == CheckInContextCategories.USAGE }.status,
         )
         assertEquals(
-            CheckInContextStatus.UNREVIEWED,
+            CheckInContextStatus.NONE,
             categories.first { it.category == CheckInContextCategories.DIET }.status,
         )
         assertEquals(atEight + 1, runBlocking { repository.getContextWindow("eight") }!!.completedAt)

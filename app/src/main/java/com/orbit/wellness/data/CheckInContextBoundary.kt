@@ -67,12 +67,12 @@ object CheckInContextBoundary {
         )
     }
 
-    fun unreviewedCategories(checkInId: String): List<CheckInContextCategory> {
+    fun defaultCategories(checkInId: String): List<CheckInContextCategory> {
         return CheckInContextCategories.ALL.map { category ->
             CheckInContextCategory(
                 checkInId = checkInId,
                 category = category,
-                status = CheckInContextStatus.UNREVIEWED,
+                status = CheckInContextStatus.NONE,
                 reviewedAt = null,
             )
         }

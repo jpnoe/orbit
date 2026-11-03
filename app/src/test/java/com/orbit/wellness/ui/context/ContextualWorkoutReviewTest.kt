@@ -80,12 +80,11 @@ class ContextualWorkoutReviewTest {
             commitWorkoutReview(repository, "ten", draft.commitForBack())
         }
         assertTrue(runBlocking { repository.getWorkoutItems("ten") }.isEmpty())
-        assertEquals(CheckInContextStatus.UNREVIEWED, workoutStatus(repository))
+        assertEquals(CheckInContextStatus.NONE, workoutStatus(repository))
     }
 
     @Test
     fun explicitNoneUsesTheIntervalNeutralLabelAndClearsEntries() {
-        assertEquals("No workouts to report", CONTEXTUAL_WORKOUT_NONE_LABEL)
         val repository = repositoryWithCheckIn()
         val draft = readyDraft()
         draft.selectOption("strength")

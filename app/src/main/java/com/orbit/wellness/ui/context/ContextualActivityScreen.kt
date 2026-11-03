@@ -14,7 +14,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -28,8 +27,6 @@ import com.orbit.wellness.ui.activity.ActivityOptionPicker
 import com.orbit.wellness.ui.activity.AddActivityNameDialog
 import com.orbit.wellness.ui.util.CollectSnackbarMessages
 import com.orbit.wellness.ui.util.rememberHideKeyboard
-
-internal const val CONTEXTUAL_ACTIVITY_NONE_LABEL = "No activities to report"
 
 @Composable
 fun ContextualActivityScreen(
@@ -108,20 +105,10 @@ fun ContextualActivityScreen(
                 hideKeyboard()
                 viewModel.saveActivities()
             },
-            enabled = !uiState.isSaving && uiState.selectedIds.isNotEmpty(),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Save activities")
-        }
-        OutlinedButton(
-            onClick = {
-                hideKeyboard()
-                viewModel.saveNone()
-            },
             enabled = !uiState.isSaving,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(CONTEXTUAL_ACTIVITY_NONE_LABEL)
+            Text("Save activities")
         }
     }
 

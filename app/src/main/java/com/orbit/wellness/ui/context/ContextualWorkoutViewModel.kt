@@ -158,13 +158,7 @@ class ContextualWorkoutViewModel(
 
     fun saveWorkouts() {
         if (_uiState.value.isSaving || _uiState.value.missing) return
-        if (draft.snapshots().isEmpty()) return
         commit(draft.commitForSave())
-    }
-
-    fun saveNone() {
-        if (_uiState.value.isSaving || _uiState.value.missing) return
-        commit(draft.commitForNone())
     }
 
     private fun commit(commit: WorkoutReviewCommit) {
