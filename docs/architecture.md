@@ -4,11 +4,17 @@ The logging interface records more detailed data than the current analysis vecto
 
 ## Configurable check-ins
 
-Schema version 17 adds configurable check-ins as a new observation layer alongside `MoodSample`. `CheckInAxis` defines a named 0–10 scale, `CheckInRecord` stores when a check-in happened and why (`wake`, `scheduled`, `manual`, or `evening`), and `CheckInAxisValue` stores one integer for each axis in that check-in. Stable default axes are mood, energy, confidence, and anxiety. The check-in screen reads enabled axes and saves explicit values with trigger `manual`. An untouched slider is not saved. When the mood axis is explicitly set, the screen also writes a `MoodSample` and updates the committed mood so existing history and the fixed state vector keep receiving mood. Other axes are not copied into `MoodSample`.
+Schema version 18 keeps two different kinds of check-in data, plus the older detailed logs.
 
-The fixed ten-axis state vector is unchanged. `FeatureAxes`, `StateEncoder`, `StateVectorSnapshot`, neighbor search, grouping, and neighborhood suggestions still use the same representation and do not read configurable check-in rows.
+`CheckInRecord` and `CheckInAxisValue` are state observations. `CheckInAxis` defines a named 0–10 scale. Stable default axes are mood, energy, confidence, and anxiety. The check-in screen saves explicit values with trigger `manual`. An untouched slider is not saved. When the mood axis is explicitly set, the screen also writes a `MoodSample` and updates the committed mood so existing history and the fixed state vector keep receiving mood. Other axes are not copied into `MoodSample`.
 
-Translating configurable axes into a versioned analysis schema is future work. Until that schema exists, these rows are observations only.
+`CheckInContextWindow` is the interval the person was asked about, ending at that check-in's `recordedAt`. Its start is snapshotted once: the previous same-day check-in, otherwise that day's logged wake time when the wake is not after the check-in, otherwise the local start of the day. A later backdated check-in does not rewrite a window already stored. `previousCheckInId` is cleared if that earlier check-in is deleted, and the stored start time stays. Each window has four `CheckInContextCategory` rows — activity, workout, diet, and usage — created as `unreviewed`. `unreviewed` is not "none." `CheckInActivityItem` records activities attributed to that interval, with the displayed name kept as a snapshot and `reportedAt` marking when the report was saved. These items do not invent an occurrence time. Saving an empty activity selection stores status `none` and no placeholder item.
+
+Detailed `ActivityEvent`, workout, meal, sleep, and usage logs remain a separate logging path. Replacing contextual activity items does not modify `ActivityEvent` history.
+
+The fixed ten-axis state vector is unchanged. `FeatureAxes`, `StateEncoder`, `StateVectorSnapshot`, neighbor search, grouping, and neighborhood suggestions still use the same representation and do not read configurable check-in rows or context windows.
+
+Translating configurable axes into a versioned analysis schema is future work. Until that schema exists, these rows are observations and interval reports only.
 
 ## State representation
 
@@ -53,6 +59,6 @@ The only current call to `suggestBetterNeighborhood()` outside the repository is
 
 ## Storage and communication
 
-Room schema version 17 contains the observation and analysis tables, including the configurable check-in tables. SQLCipher encrypts that database, and Tink / Android Keystore protect its passphrase. The last committed mood is also stored in app-private SharedPreferences; not all state is covered by the database encryption claim.
+Room schema version 18 contains the observation and analysis tables, including configurable check-ins and their context windows. SQLCipher encrypts that database, and Tink / Android Keystore protect its passphrase. The last committed mood is also stored in app-private SharedPreferences; not all state is covered by the database encryption claim.
 
 Open Food Facts requests and configured SMS shares are explicit external communication paths. Inbound SMS handling currently ignores triggers. This source does not include a hosted account or synchronization service.

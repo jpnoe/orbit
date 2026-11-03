@@ -331,6 +331,60 @@ object OrbitMigrations {
         }
     }
 
+    val MIGRATION_17_18 = object : Migration(17, 18) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_in_context_windows (
+                    checkInId TEXT NOT NULL,
+                    previousCheckInId TEXT,
+                    windowStartAt INTEGER NOT NULL,
+                    windowEndAt INTEGER NOT NULL,
+                    startBasis TEXT NOT NULL,
+                    completedAt INTEGER,
+                    PRIMARY KEY(checkInId),
+                    FOREIGN KEY(checkInId) REFERENCES check_ins(id) ON UPDATE NO ACTION ON DELETE CASCADE,
+                    FOREIGN KEY(previousCheckInId) REFERENCES check_ins(id) ON UPDATE NO ACTION ON DELETE SET NULL
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_context_windows_previousCheckInId ON check_in_context_windows(previousCheckInId)",
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_in_context_categories (
+                    checkInId TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    reviewedAt INTEGER,
+                    PRIMARY KEY(checkInId, category),
+                    FOREIGN KEY(checkInId) REFERENCES check_in_context_windows(checkInId) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_context_categories_checkInId ON check_in_context_categories(checkInId)",
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_in_activity_items (
+                    id TEXT NOT NULL,
+                    checkInId TEXT NOT NULL,
+                    activityOptionId TEXT,
+                    activityName TEXT NOT NULL,
+                    reportedAt INTEGER NOT NULL,
+                    PRIMARY KEY(id),
+                    FOREIGN KEY(checkInId) REFERENCES check_in_context_windows(checkInId) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_activity_items_checkInId ON check_in_activity_items(checkInId)",
+            )
+        }
+    }
+
     val ALL = arrayOf(
         MIGRATION_10_11,
         MIGRATION_11_12,
@@ -339,5 +393,6 @@ object OrbitMigrations {
         MIGRATION_14_15,
         MIGRATION_15_16,
         MIGRATION_16_17,
+        MIGRATION_17_18,
     )
 }

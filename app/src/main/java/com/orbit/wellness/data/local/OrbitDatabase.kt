@@ -33,8 +33,11 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
         CheckInAxis::class,
         CheckInRecord::class,
         CheckInAxisValue::class,
+        CheckInContextWindow::class,
+        CheckInContextCategory::class,
+        CheckInActivityItem::class,
     ],
-    version = 17,
+    version = 18,
     exportSchema = true,
 )
 abstract class OrbitDatabase : RoomDatabase() {

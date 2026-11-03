@@ -83,7 +83,12 @@ class OrbitApplication : Application() {
             dao = database.moodSampleDao(),
             emotionDao = database.emotionOptionDao(),
         )
-        checkInRepository = CheckInRepository(database.checkInDao())
+        checkInRepository = CheckInRepository(
+            dao = database.checkInDao(),
+            wakeTimes = { localDate ->
+                database.sleepEventDao().getForDate(localDate)?.wakeTime
+            },
+        )
         journalRepository = JournalRepository(database.dailyJournalDao())
         activityRepository = ActivityRepository(
             eventDao = database.activityEventDao(),
