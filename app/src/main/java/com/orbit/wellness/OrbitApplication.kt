@@ -2,6 +2,7 @@ package com.orbit.wellness
 
 import android.app.Application
 import com.orbit.wellness.data.ActivityRepository
+import com.orbit.wellness.data.CheckInRepository
 import com.orbit.wellness.data.CurrentMoodStore
 import com.orbit.wellness.data.DietRepository
 import com.orbit.wellness.data.ExerciseRepository
@@ -37,6 +38,8 @@ class OrbitApplication : Application() {
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     lateinit var moodRepository: MoodRepository
+        private set
+    lateinit var checkInRepository: CheckInRepository
         private set
     lateinit var journalRepository: JournalRepository
         private set
@@ -80,6 +83,7 @@ class OrbitApplication : Application() {
             dao = database.moodSampleDao(),
             emotionDao = database.emotionOptionDao(),
         )
+        checkInRepository = CheckInRepository(database.checkInDao())
         journalRepository = JournalRepository(database.dailyJournalDao())
         activityRepository = ActivityRepository(
             eventDao = database.activityEventDao(),
@@ -165,6 +169,7 @@ class OrbitApplication : Application() {
             OrbitDatabase.ensureDefaultSubstances(database.substanceOptionDao())
             OrbitDatabase.ensureDefaultWorkoutTypes(database.workoutOptionDao())
             OrbitDatabase.ensureDefaultEmotions(database.emotionOptionDao())
+            OrbitDatabase.ensureDefaultCheckInAxes(database.checkInDao())
             moodRepository.getLatestSample()?.let { sample ->
                 currentMoodStore.hydrateFromSample(sample.moodScore, sample.recordedAt)
             }

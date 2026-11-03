@@ -265,6 +265,72 @@ object OrbitMigrations {
         }
     }
 
+    val MIGRATION_16_17 = object : Migration(16, 17) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_in_axes (
+                    id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    lowLabel TEXT NOT NULL,
+                    highLabel TEXT NOT NULL,
+                    sortOrder INTEGER NOT NULL,
+                    isDefault INTEGER NOT NULL,
+                    isEnabled INTEGER NOT NULL,
+                    createdAt INTEGER NOT NULL,
+                    PRIMARY KEY(id)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_axes_sortOrder ON check_in_axes(sortOrder)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_axes_isEnabled_sortOrder ON check_in_axes(isEnabled, sortOrder)",
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_ins (
+                    id TEXT NOT NULL,
+                    localDate TEXT NOT NULL,
+                    recordedAt INTEGER NOT NULL,
+                    trigger TEXT NOT NULL,
+                    note TEXT NOT NULL,
+                    PRIMARY KEY(id)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_ins_localDate ON check_ins(localDate)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_ins_recordedAt ON check_ins(recordedAt)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_ins_trigger ON check_ins(trigger)",
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_in_axis_values (
+                    checkInId TEXT NOT NULL,
+                    axisId TEXT NOT NULL,
+                    value INTEGER NOT NULL,
+                    PRIMARY KEY(checkInId, axisId),
+                    FOREIGN KEY(checkInId) REFERENCES check_ins(id) ON UPDATE NO ACTION ON DELETE CASCADE,
+                    FOREIGN KEY(axisId) REFERENCES check_in_axes(id) ON UPDATE NO ACTION ON DELETE NO ACTION
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_axis_values_checkInId ON check_in_axis_values(checkInId)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_axis_values_axisId ON check_in_axis_values(axisId)",
+            )
+            db.execSQL(DefaultCheckInAxes.insertOrIgnoreSql())
+        }
+    }
+
     val ALL = arrayOf(
         MIGRATION_10_11,
         MIGRATION_11_12,
@@ -272,5 +338,6 @@ object OrbitMigrations {
         MIGRATION_13_14,
         MIGRATION_14_15,
         MIGRATION_15_16,
+        MIGRATION_16_17,
     )
 }

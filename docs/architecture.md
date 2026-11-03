@@ -2,6 +2,14 @@
 
 The logging interface records more detailed data than the current analysis vector represents. This distinction is central to evaluating the prototype.
 
+## Configurable check-ins
+
+Schema version 17 adds configurable check-ins as a new observation layer alongside `MoodSample`. `CheckInAxis` defines a named 0–10 scale, `CheckInRecord` stores when a check-in happened and why (`wake`, `scheduled`, `manual`, or `evening`), and `CheckInAxisValue` stores one integer for each axis in that check-in. Stable default axes are mood, energy, confidence, and anxiety. The existing check-in screen still writes `MoodSample` rows and does not read this layer yet.
+
+The fixed ten-axis state vector is unchanged. `FeatureAxes`, `StateEncoder`, `StateVectorSnapshot`, neighbor search, grouping, and neighborhood suggestions still use the same representation and do not read configurable check-in rows.
+
+Translating configurable axes into a versioned analysis schema is future work. Until that schema exists, these rows are observations only.
+
 ## State representation
 
 `domain/state/StateEncoder.kt` reads Room observations and the latest biometric snapshot, then persists a `StateVectorSnapshot`. `FeatureAxes` fixes the following ten dimensions.
@@ -45,6 +53,6 @@ The only current call to `suggestBetterNeighborhood()` outside the repository is
 
 ## Storage and communication
 
-Room schema version 16 contains the observation and analysis tables. SQLCipher encrypts that database, and Tink / Android Keystore protect its passphrase. The last committed mood is also stored in app-private SharedPreferences; not all state is covered by the database encryption claim.
+Room schema version 17 contains the observation and analysis tables, including the configurable check-in tables. SQLCipher encrypts that database, and Tink / Android Keystore protect its passphrase. The last committed mood is also stored in app-private SharedPreferences; not all state is covered by the database encryption claim.
 
 Open Food Facts requests and configured SMS shares are explicit external communication paths. Inbound SMS handling currently ignores triggers. This source does not include a hosted account or synchronization service.
