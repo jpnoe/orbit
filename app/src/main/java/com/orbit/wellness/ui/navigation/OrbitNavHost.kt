@@ -199,6 +199,7 @@ fun OrbitApp(
                 val viewModel: CheckInViewModel = viewModel(
                     factory = CheckInViewModel.Factory(
                         moodRepository = application.moodRepository,
+                        checkInRepository = application.checkInRepository,
                         sleepRepository = application.sleepRepository,
                         currentMoodStore = application.currentMoodStore,
                         biometricRepository = application.biometricRepository,

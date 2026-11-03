@@ -40,7 +40,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.orbit.wellness.R
 import com.orbit.wellness.data.local.WorkoutEvent
-import com.orbit.wellness.ui.checkin.moodDescriptorResId
 import com.orbit.wellness.ui.history.EditWorkoutDialog
 import com.orbit.wellness.ui.util.CollectSavedFeedback
 import com.orbit.wellness.ui.util.CollectSnackbarMessages
@@ -275,11 +274,6 @@ fun ExerciseScreen(
                 style = MaterialTheme.typography.displaySmall,
                 color = MaterialTheme.colorScheme.primary,
             )
-            Text(
-                text = stringResource(moodDescriptorResId(moodInt)),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             Slider(
                 value = uiState.moodScore,
                 onValueChange = { newValue ->
@@ -472,11 +466,6 @@ private fun WorkoutMoodSheet(
                 text = moodInt.toString(),
                 style = MaterialTheme.typography.displaySmall,
                 color = MaterialTheme.colorScheme.primary,
-            )
-            Text(
-                text = stringResource(moodDescriptorResId(moodInt)),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Slider(
                 value = moodScore,

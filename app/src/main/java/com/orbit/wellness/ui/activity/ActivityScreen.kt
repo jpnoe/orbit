@@ -40,7 +40,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.orbit.wellness.R
 import com.orbit.wellness.data.local.ActivityEvent
-import com.orbit.wellness.ui.checkin.moodDescriptorResId
 import com.orbit.wellness.ui.history.EditActivityDialog
 import com.orbit.wellness.ui.util.CollectSavedFeedback
 import com.orbit.wellness.ui.util.CollectSnackbarMessages
@@ -172,11 +171,6 @@ fun ActivityScreen(
                 text = moodInt.toString(),
                 style = MaterialTheme.typography.displaySmall,
                 color = MaterialTheme.colorScheme.primary,
-            )
-            Text(
-                text = stringResource(moodDescriptorResId(moodInt)),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Slider(
                 value = uiState.moodScore,
@@ -322,11 +316,6 @@ private fun ActivityMoodSheet(
                 text = moodInt.toString(),
                 style = MaterialTheme.typography.displaySmall,
                 color = MaterialTheme.colorScheme.primary,
-            )
-            Text(
-                text = stringResource(moodDescriptorResId(moodInt)),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Slider(
                 value = moodScore,

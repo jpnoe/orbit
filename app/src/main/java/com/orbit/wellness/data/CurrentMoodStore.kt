@@ -6,8 +6,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Last **logged** mood for seeding sliders.
- * Draft slider moves stay on the screen; leaving without logging snaps back here.
+ * Last logged mood. Check-in may display this as a visual anchor.
+ * Showing the anchor does not record an observation.
  */
 class CurrentMoodStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

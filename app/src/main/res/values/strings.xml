@@ -11,9 +11,12 @@
     <string name="journal_today_label">Today</string>
     <string name="edit_journal_title">Edit journal</string>
     <string name="delete_journal_message">Remove this journal entry? You can write a new one afterward.</string>
-    <string name="save_mood">Log mood</string>
+    <string name="save_mood">Save check-in</string>
     <string name="save_journal">Save journal</string>
-    <string name="mood_saved">Mood logged</string>
+    <string name="mood_saved">Check-in saved</string>
+    <string name="check_in_not_set">-</string>
+    <string name="check_in_clear_axis">Clear</string>
+    <string name="check_in_no_axes">No check-in scales are enabled.</string>
     <string name="journal_saved">Journal saved</string>
     <string name="mood_logs_today">%1$d mood logs today</string>
     <string name="tab_check_in">Mood</string>
@@ -78,12 +81,6 @@
     <string name="privacy_note">Mood, journal, sleep, use logs, and workouts stay on your device. Barcode lookup uses Open Food Facts over the network.</string>
     <string name="mood_low">Low</string>
     <string name="mood_high">Great</string>
-    <string name="mood_descriptor_rough">Rough</string>
-    <string name="mood_descriptor_low">Struggling</string>
-    <string name="mood_descriptor_neutral">Neutral</string>
-    <string name="mood_descriptor_okay">Okay</string>
-    <string name="mood_descriptor_good">Good</string>
-    <string name="mood_descriptor_excellent">Excellent</string>
 
     <string name="diet_title">Diet</string>
     <string name="diet_subtitle">Log meals by quick add, barcode, search, or manual entry.</string>

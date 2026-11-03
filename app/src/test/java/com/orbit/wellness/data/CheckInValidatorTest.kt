@@ -29,6 +29,16 @@ class CheckInValidatorTest {
     }
 
     @Test
+    fun rejectsBlankAxisIds() {
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            CheckInValidator.validate(
+                listOf(CheckInAxisInput("  ", 5)),
+            )
+        }
+        assertTrue(error.message!!.contains("blank"))
+    }
+
+    @Test
     fun rejectsDuplicateAxisIds() {
         val error = assertThrows(IllegalArgumentException::class.java) {
             CheckInValidator.validate(

@@ -4,7 +4,7 @@ The logging interface records more detailed data than the current analysis vecto
 
 ## Configurable check-ins
 
-Schema version 17 adds configurable check-ins as a new observation layer alongside `MoodSample`. `CheckInAxis` defines a named 0–10 scale, `CheckInRecord` stores when a check-in happened and why (`wake`, `scheduled`, `manual`, or `evening`), and `CheckInAxisValue` stores one integer for each axis in that check-in. Stable default axes are mood, energy, confidence, and anxiety. The existing check-in screen still writes `MoodSample` rows and does not read this layer yet.
+Schema version 17 adds configurable check-ins as a new observation layer alongside `MoodSample`. `CheckInAxis` defines a named 0–10 scale, `CheckInRecord` stores when a check-in happened and why (`wake`, `scheduled`, `manual`, or `evening`), and `CheckInAxisValue` stores one integer for each axis in that check-in. Stable default axes are mood, energy, confidence, and anxiety. The check-in screen reads enabled axes and saves explicit values with trigger `manual`. An untouched slider is not saved. When the mood axis is explicitly set, the screen also writes a `MoodSample` and updates the committed mood so existing history and the fixed state vector keep receiving mood. Other axes are not copied into `MoodSample`.
 
 The fixed ten-axis state vector is unchanged. `FeatureAxes`, `StateEncoder`, `StateVectorSnapshot`, neighbor search, grouping, and neighborhood suggestions still use the same representation and do not read configurable check-in rows.
 

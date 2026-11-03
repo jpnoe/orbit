@@ -1,5 +1,7 @@
 package com.orbit.wellness.ui.checkin
 
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -45,6 +47,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.orbit.wellness.R
+import com.orbit.wellness.data.CheckInDrafts
+import com.orbit.wellness.data.local.CheckInAxis
+import com.orbit.wellness.data.local.DefaultCheckInAxes
 import com.orbit.wellness.data.local.MoodSample
 import com.orbit.wellness.ui.history.EditMoodDialog
 import com.orbit.wellness.ui.util.CollectSavedFeedback
@@ -71,10 +76,7 @@ fun CheckInScreen(
     val uiState by viewModel.uiState.collectAsState()
     val savedMessage = stringResource(R.string.mood_saved)
     val sleepSavedMessage = stringResource(R.string.sleep_saved)
-    val haptic = LocalHapticFeedback.current
     val hideKeyboard = rememberHideKeyboard()
-    val moodInt = uiState.moodScore.roundToInt()
-    var lastHapticMood by remember { mutableIntStateOf(moodInt) }
     var sleepTimeField by remember { mutableStateOf<SleepTimeField?>(null) }
     var sleepEditing by remember { mutableStateOf(false) }
     var editingMood by remember { mutableStateOf<MoodSample?>(null) }
@@ -92,10 +94,6 @@ fun CheckInScreen(
             lifecycleOwner.lifecycle.removeObserver(observer)
             viewModel.syncFromCommitted()
         }
-    }
-
-    LaunchedEffect(moodInt) {
-        lastHapticMood = moodInt
     }
 
     CollectSavedFeedback(
@@ -154,13 +152,7 @@ fun CheckInScreen(
                 onCollapse = { sleepEditing = false },
                 onPickBedtime = { sleepTimeField = SleepTimeField.Bedtime },
                 onPickWake = { sleepTimeField = SleepTimeField.Wake },
-                onQualityChanged = { newValue ->
-                    val newInt = newValue.roundToInt()
-                    if (newInt != lastHapticMood) {
-                        haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                    }
-                    viewModel.onSleepQualityChanged(newValue)
-                },
+                onQualityChanged = viewModel::onSleepQualityChanged,
                 onSave = {
                     hideKeyboard()
                     viewModel.saveSleep()
@@ -173,51 +165,47 @@ fun CheckInScreen(
             style = MaterialTheme.typography.titleMedium,
         )
 
-        Text(
-            text = moodInt.toString(),
-            style = MaterialTheme.typography.displaySmall,
-            color = MaterialTheme.colorScheme.primary,
-        )
+        if (uiState.axesLoaded && uiState.enabledAxes.isEmpty()) {
+            Text(
+                text = stringResource(R.string.check_in_no_axes),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
 
-        Text(
-            text = stringResource(moodDescriptorResId(moodInt)),
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        uiState.enabledAxes.forEach { axis ->
+            CheckInAxisRow(
+                axis = axis,
+                explicitValue = uiState.axisDrafts[axis.id],
+                moodAnchor = uiState.moodAnchor,
+                onValueChange = { viewModel.onAxisChanged(axis.id, it) },
+                onClear = { viewModel.clearAxis(axis.id) },
+            )
+        }
 
-        MoodSlider(
-            value = uiState.moodScore,
-            onValueChange = { newValue ->
-                val newInt = newValue.roundToInt()
-                if (newInt != lastHapticMood) {
-                    haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                    lastHapticMood = newInt
+        if (uiState.enabledAxes.any { it.id == DefaultCheckInAxes.MOOD }) {
+            Text(
+                text = stringResource(R.string.predominant_emotion_label),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                uiState.emotionOptions.forEach { option ->
+                    val isSelected = uiState.selectedEmotion == option.name
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { viewModel.onEmotionSelected(option.name) },
+                        label = { Text(option.name) },
+                    )
                 }
-                viewModel.onMoodChanged(newValue)
-            },
-        )
-
-        Text(
-            text = stringResource(R.string.predominant_emotion_label),
-            style = MaterialTheme.typography.titleMedium,
-        )
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            uiState.emotionOptions.forEach { option ->
-                val isSelected = uiState.selectedEmotion == option.name
                 FilterChip(
-                    selected = isSelected,
-                    onClick = { viewModel.onEmotionSelected(option.name) },
-                    label = { Text(option.name) },
+                    selected = false,
+                    onClick = viewModel::openAddEmotionDialog,
+                    label = { Text(stringResource(R.string.add_activity)) },
                 )
             }
-            FilterChip(
-                selected = false,
-                onClick = viewModel::openAddEmotionDialog,
-                label = { Text(stringResource(R.string.add_activity)) },
-            )
         }
 
         OutlinedTextField(
@@ -256,7 +244,7 @@ fun CheckInScreen(
         Button(
             onClick = {
                 hideKeyboard()
-                viewModel.saveMood()
+                viewModel.saveCheckIn()
             },
             enabled = !uiState.isSaving,
             modifier = Modifier.align(Alignment.CenterHorizontally),
@@ -456,14 +444,18 @@ private fun SleepSummaryCard(
                 style = MaterialTheme.typography.displaySmall,
                 color = MaterialTheme.colorScheme.primary,
             )
-            Text(
-                text = stringResource(moodDescriptorResId(qualityInt)),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            val haptic = LocalHapticFeedback.current
+            var lastHapticQuality by remember(qualityInt) { mutableIntStateOf(qualityInt) }
             Slider(
                 value = sleepQuality,
-                onValueChange = onQualityChanged,
+                onValueChange = { newValue ->
+                    val newInt = newValue.roundToInt()
+                    if (newInt != lastHapticQuality) {
+                        haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                        lastHapticQuality = newInt
+                    }
+                    onQualityChanged(newValue)
+                },
                 valueRange = 0f..10f,
                 steps = 9,
                 modifier = Modifier.fillMaxWidth(),
@@ -523,15 +515,64 @@ private fun SleepTimePickerDialog(
 }
 
 @Composable
-private fun MoodSlider(
-    value: Float,
+private fun CheckInAxisRow(
+    axis: CheckInAxis,
+    explicitValue: Int?,
+    moodAnchor: Float,
     onValueChange: (Float) -> Unit,
-    modifier: Modifier = Modifier,
+    onClear: () -> Unit,
 ) {
-    Column(modifier = modifier) {
+    val isSet = explicitValue != null
+    val displayed = explicitValue ?: CheckInDrafts.visualAnchor(axis.id, moodAnchor)
+    val haptic = LocalHapticFeedback.current
+    val interactionSource = remember(axis.id) { MutableInteractionSource() }
+    val isDragged by interactionSource.collectIsDraggedAsState()
+    var lastHaptic by remember(axis.id) { mutableIntStateOf(displayed) }
+
+    LaunchedEffect(isDragged) {
+        if (isDragged && explicitValue == null) {
+            onValueChange(displayed.toFloat())
+        }
+    }
+
+    LaunchedEffect(displayed, isSet) {
+        if (!isSet) {
+            lastHaptic = displayed
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = axis.name,
+                style = MaterialTheme.typography.titleMedium,
+            )
+            if (isSet) {
+                TextButton(onClick = onClear) {
+                    Text(stringResource(R.string.check_in_clear_axis))
+                }
+            }
+        }
+        Text(
+            text = if (isSet) displayed.toString() else stringResource(R.string.check_in_not_set),
+            style = MaterialTheme.typography.displaySmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
         Slider(
-            value = value,
-            onValueChange = onValueChange,
+            value = displayed.toFloat(),
+            onValueChange = { newValue ->
+                val newInt = newValue.roundToInt()
+                if (newInt != lastHaptic) {
+                    haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                    lastHaptic = newInt
+                }
+                onValueChange(newValue)
+            },
+            interactionSource = interactionSource,
             valueRange = 0f..10f,
             steps = 9,
             modifier = Modifier.fillMaxWidth(),
@@ -541,11 +582,11 @@ private fun MoodSlider(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
-                text = stringResource(R.string.mood_low),
+                text = axis.lowLabel,
                 style = MaterialTheme.typography.labelMedium,
             )
             Text(
-                text = stringResource(R.string.mood_high),
+                text = axis.highLabel,
                 style = MaterialTheme.typography.labelMedium,
             )
         }

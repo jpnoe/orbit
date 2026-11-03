@@ -12,6 +12,9 @@ object CheckInValidator {
         require(values.isNotEmpty()) {
             "At least one axis value is required"
         }
+        require(values.none { it.axisId.isBlank() }) {
+            "Axis ID must not be blank"
+        }
         val duplicateIds = values
             .groupingBy { it.axisId }
             .eachCount()

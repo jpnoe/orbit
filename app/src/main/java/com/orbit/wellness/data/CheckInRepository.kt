@@ -30,11 +30,15 @@ class CheckInRepository(
         id: String = UUID.randomUUID().toString(),
     ): CheckInRecord {
         CheckInValidator.validate(axisValues)
+        val normalizedTrigger = trigger.trim()
+        require(normalizedTrigger.isNotBlank()) {
+            "Check-in trigger must not be blank"
+        }
         val record = CheckInRecord(
             id = id,
             localDate = localDate,
             recordedAt = recordedAt,
-            trigger = trigger,
+            trigger = normalizedTrigger,
             note = note.trim(),
         )
         val rows = axisValues.map { input ->
