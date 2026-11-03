@@ -1,6 +1,7 @@
 package com.orbit.wellness.data
 
 import androidx.room.withTransaction
+import com.orbit.wellness.data.local.CheckInRecord
 import com.orbit.wellness.data.local.MoodSample
 import com.orbit.wellness.data.local.OrbitDatabase
 import kotlinx.coroutines.CancellationException
@@ -20,6 +21,15 @@ data class LegacyCheckInMood(
 fun interface MoodSampleWriter {
     suspend fun insert(sample: MoodSample)
 }
+
+fun interface MoodSampleRemover {
+    suspend fun delete(id: String)
+}
+
+data class SavedCheckIn(
+    val record: CheckInRecord,
+    val legacyMoodSampleId: String? = null,
+)
 
 /**
  * Runs a submission as one unit of work.

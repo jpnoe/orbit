@@ -9,6 +9,7 @@ import com.orbit.wellness.data.ExerciseRepository
 import com.orbit.wellness.data.HistoryRepository
 import com.orbit.wellness.data.JournalRepository
 import com.orbit.wellness.data.MoodRepository
+import com.orbit.wellness.data.MoodSampleRemover
 import com.orbit.wellness.data.MoodSampleWriter
 import com.orbit.wellness.data.RoomDatabaseTransaction
 import com.orbit.wellness.data.ReminderPreferences
@@ -88,6 +89,7 @@ class OrbitApplication : Application() {
         checkInRepository = CheckInRepository(
             dao = database.checkInDao(),
             moodSamples = MoodSampleWriter { sample -> database.moodSampleDao().insert(sample) },
+            moodRemover = MoodSampleRemover { id -> database.moodSampleDao().deleteById(id) },
             transaction = RoomDatabaseTransaction(database),
             wakeTimes = { localDate ->
                 database.sleepEventDao().getForDate(localDate)?.wakeTime

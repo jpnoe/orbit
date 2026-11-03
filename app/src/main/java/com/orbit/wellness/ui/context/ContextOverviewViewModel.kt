@@ -71,8 +71,9 @@ class ContextOverviewViewModel(
                     checkInRepository.observeContextWindow(checkInId),
                     checkInRepository.observeContextCategories(checkInId),
                     checkInRepository.observeActivityItems(checkInId),
-                ) { window, categories, items ->
-                    ContextOverviewCopy.present(window, categories, items)
+                    checkInRepository.observeWorkoutItems(checkInId),
+                ) { window, categories, activityItems, workoutItems ->
+                    ContextOverviewCopy.present(window, categories, activityItems, workoutItems)
                 }.collect { overview ->
                     _uiState.update { it.copy(loaded = true, overview = overview) }
                 }

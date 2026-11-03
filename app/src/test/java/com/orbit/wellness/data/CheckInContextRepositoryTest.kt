@@ -35,13 +35,13 @@ class CheckInContextRepositoryTest {
                 id = "ten",
             )
         }
-        val original = runBlocking { repository.getContextWindow(later.id) }!!
+        val original = runBlocking { repository.getContextWindow(later.record.id) }!!
         assertEquals(wake, original.windowStartAt)
         assertEquals(atTen, original.windowEndAt)
         assertEquals(CheckInContextStartBasis.WAKE_TIME, original.startBasis)
         assertNull(original.previousCheckInId)
         assertNull(original.completedAt)
-        val categories = runBlocking { repository.getContextCategories(later.id) }
+        val categories = runBlocking { repository.getContextCategories(later.record.id) }
         assertEquals(CheckInContextCategories.ALL, categories.map { it.category })
         assertTrue(categories.all { it.status == CheckInContextStatus.UNREVIEWED && it.reviewedAt == null })
 

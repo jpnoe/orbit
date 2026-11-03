@@ -2,6 +2,7 @@ package com.orbit.wellness.ui.context
 
 import com.orbit.wellness.data.local.CheckInActivityItem
 import com.orbit.wellness.data.local.CheckInContextCategories
+import com.orbit.wellness.data.local.CheckInWorkoutItem
 import com.orbit.wellness.data.local.CheckInContextCategory
 import com.orbit.wellness.data.local.CheckInContextStartBasis
 import com.orbit.wellness.data.local.CheckInContextStatus
@@ -37,6 +38,7 @@ object ContextOverviewCopy {
         window: CheckInContextWindow?,
         categories: List<CheckInContextCategory>,
         activityItems: List<CheckInActivityItem>,
+        workoutItems: List<CheckInWorkoutItem> = emptyList(),
         zone: ZoneId = ZoneId.systemDefault(),
     ): ContextOverviewModel {
         if (window == null) {
@@ -46,14 +48,21 @@ object ContextOverviewCopy {
         val byCategory = categories.associateBy { it.category }
         val cards = CheckInContextCategories.ALL.map { category ->
             val status = byCategory[category]?.status ?: CheckInContextStatus.UNREVIEWED
-            val interactive = category == CheckInContextCategories.ACTIVITY
+            val interactive = category == CheckInContextCategories.ACTIVITY ||
+                category == CheckInContextCategories.WORKOUT
             ContextCategoryCardModel(
                 category = category,
                 title = categoryTitle(category),
-                statusText = if (interactive) {
-                    activityStatusText(status, activityItems.map { it.activityName })
-                } else {
-                    passiveStatusText(status)
+                statusText = when (category) {
+                    CheckInContextCategories.ACTIVITY -> activityStatusText(
+                        status,
+                        activityItems.map { it.activityName },
+                    )
+                    CheckInContextCategories.WORKOUT -> workoutStatusText(
+                        status,
+                        workoutItems.map { it.workoutName to it.durationMinutes },
+                    )
+                    else -> passiveStatusText(status)
                 },
                 interactive = interactive,
                 comingNext = !interactive,
@@ -84,6 +93,18 @@ object ContextOverviewCopy {
                 1 -> names.first()
                 2 -> names.joinToString(", ")
                 else -> "${names.size} activities"
+            }
+            else -> NOT_REVIEWED
+        }
+    }
+
+    fun workoutStatusText(status: String, workouts: List<Pair<String, Int>>): String {
+        return when (status) {
+            CheckInContextStatus.NONE -> NONE
+            CheckInContextStatus.ENTRIES -> when (workouts.size) {
+                0 -> NOT_REVIEWED
+                1 -> "${workouts.first().first} · ${workouts.first().second} min"
+                else -> "${workouts.size} workouts · ${workouts.sumOf { it.second }} min"
             }
             else -> NOT_REVIEWED
         }

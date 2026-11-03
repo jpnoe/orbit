@@ -2,6 +2,7 @@ package com.orbit.wellness.ui.context
 
 import com.orbit.wellness.data.local.CheckInActivityItem
 import com.orbit.wellness.data.local.CheckInContextCategories
+import com.orbit.wellness.data.local.CheckInWorkoutItem
 import com.orbit.wellness.data.local.CheckInContextCategory
 import com.orbit.wellness.data.local.CheckInContextStartBasis
 import com.orbit.wellness.data.local.CheckInContextStatus
@@ -72,7 +73,30 @@ class ContextOverviewCopyTest {
     }
 
     @Test
-    fun onlyActivityIsInteractiveAndOtherCardsStayComingNext() {
+    fun workoutSummariesCoverNoneOneAndMany() {
+        assertEquals(
+            ContextOverviewCopy.NOT_REVIEWED,
+            ContextOverviewCopy.workoutStatusText(CheckInContextStatus.UNREVIEWED, emptyList()),
+        )
+        assertEquals(
+            ContextOverviewCopy.NONE,
+            ContextOverviewCopy.workoutStatusText(CheckInContextStatus.NONE, emptyList()),
+        )
+        assertEquals(
+            "Cardio · 30 min",
+            ContextOverviewCopy.workoutStatusText(CheckInContextStatus.ENTRIES, listOf("Cardio" to 30)),
+        )
+        assertEquals(
+            "2 workouts · 75 min",
+            ContextOverviewCopy.workoutStatusText(
+                CheckInContextStatus.ENTRIES,
+                listOf("Cardio" to 30, "Strength" to 45),
+            ),
+        )
+    }
+
+    @Test
+    fun activityAndWorkoutAreInteractiveAndDietAndUsageStayComingNext() {
         val window = CheckInContextWindow(
             checkInId = "check-in",
             previousCheckInId = null,
@@ -84,7 +108,10 @@ class ContextOverviewCopyTest {
             CheckInContextCategory(
                 checkInId = "check-in",
                 category = category,
-                status = if (category == CheckInContextCategories.ACTIVITY) {
+                status = if (
+                    category == CheckInContextCategories.ACTIVITY ||
+                    category == CheckInContextCategories.WORKOUT
+                ) {
                     CheckInContextStatus.ENTRIES
                 } else {
                     CheckInContextStatus.UNREVIEWED
@@ -102,13 +129,29 @@ class ContextOverviewCopyTest {
                     reportedAt = 1_000L,
                 ),
             ),
+            workoutItems = listOf(
+                CheckInWorkoutItem(
+                    checkInId = "check-in",
+                    workoutOptionId = "cardio",
+                    workoutName = "Cardio",
+                    durationMinutes = 30,
+                    reportedAt = 1_000L,
+                ),
+            ),
             zone = ZoneOffset.UTC,
         )
         val activity = overview.cards.first { it.category == CheckInContextCategories.ACTIVITY }
         assertTrue(activity.interactive)
         assertFalse(activity.comingNext)
         assertEquals("Walk", activity.statusText)
-        overview.cards.filter { it.category != CheckInContextCategories.ACTIVITY }.forEach { card ->
+        val workout = overview.cards.first { it.category == CheckInContextCategories.WORKOUT }
+        assertTrue(workout.interactive)
+        assertFalse(workout.comingNext)
+        assertEquals("Cardio · 30 min", workout.statusText)
+        overview.cards.filter {
+            it.category != CheckInContextCategories.ACTIVITY &&
+                it.category != CheckInContextCategories.WORKOUT
+        }.forEach { card ->
             assertFalse(card.interactive)
             assertTrue(card.comingNext)
             assertEquals(ContextOverviewCopy.NOT_REVIEWED, card.statusText)

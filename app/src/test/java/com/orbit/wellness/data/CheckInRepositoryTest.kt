@@ -40,8 +40,29 @@ class CheckInRepositoryTest {
                 recordedAt = 1_700_000_000_000L,
             )
         }
-        assertEquals("after_workout", saved.trigger)
+        assertEquals("after_workout", saved.record.trigger)
         assertEquals("after_workout", dao.inserted?.trigger)
+    }
+
+    @Test
+    fun migration18To19IsRegistered() {
+        val migration = OrbitMigrations.ALL.single { it.startVersion == 18 && it.endVersion == 19 }
+        assertEquals(18, migration.startVersion)
+        assertEquals(19, migration.endVersion)
+    }
+
+    @Test
+    fun exportedSchema19AddsContextualWorkoutsWithoutChangingWorkoutEvents() {
+        val current = schemaFile("19.json").readText()
+        val previous = schemaFile("18.json").readText()
+        assertTrue(current.contains("\"version\": 19"))
+        assertEquals(createSql(previous, "workout_events"), createSql(current, "workout_events"))
+        assertEquals(createSql(previous, "check_in_activity_items"), createSql(current, "check_in_activity_items"))
+        val items = createSql(current, "check_in_workout_items")
+        assertTrue(items.contains("REFERENCES `check_in_context_windows`(`checkInId`)"))
+        assertTrue(items.contains("ON DELETE CASCADE"))
+        assertTrue(items.contains("`durationMinutes` INTEGER NOT NULL"))
+        assertTrue(!items.contains("workout_options"))
     }
 
     @Test

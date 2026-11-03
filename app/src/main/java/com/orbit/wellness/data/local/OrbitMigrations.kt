@@ -385,6 +385,28 @@ object OrbitMigrations {
         }
     }
 
+    val MIGRATION_18_19 = object : Migration(18, 19) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_in_workout_items (
+                    id TEXT NOT NULL,
+                    checkInId TEXT NOT NULL,
+                    workoutOptionId TEXT,
+                    workoutName TEXT NOT NULL,
+                    durationMinutes INTEGER NOT NULL,
+                    reportedAt INTEGER NOT NULL,
+                    PRIMARY KEY(id),
+                    FOREIGN KEY(checkInId) REFERENCES check_in_context_windows(checkInId) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_workout_items_checkInId ON check_in_workout_items(checkInId)",
+            )
+        }
+    }
+
     val ALL = arrayOf(
         MIGRATION_10_11,
         MIGRATION_11_12,
@@ -394,5 +416,6 @@ object OrbitMigrations {
         MIGRATION_15_16,
         MIGRATION_16_17,
         MIGRATION_17_18,
+        MIGRATION_18_19,
     )
 }

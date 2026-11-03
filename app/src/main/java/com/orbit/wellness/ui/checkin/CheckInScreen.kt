@@ -1,5 +1,6 @@
 package com.orbit.wellness.ui.checkin
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -53,7 +54,6 @@ import com.orbit.wellness.data.local.DefaultCheckInAxes
 import com.orbit.wellness.data.local.MoodSample
 import com.orbit.wellness.ui.history.EditMoodDialog
 import com.orbit.wellness.ui.util.CollectSavedFeedback
-import com.orbit.wellness.ui.util.CollectSnackbarMessages
 import com.orbit.wellness.ui.util.LoggedAtField
 import com.orbit.wellness.ui.util.LoggedEntry
 import com.orbit.wellness.ui.util.rememberHideKeyboard
@@ -71,11 +71,10 @@ private enum class SleepTimeField {
 fun CheckInScreen(
     viewModel: CheckInViewModel,
     snackbarHostState: SnackbarHostState,
-    onOpenContext: (String) -> Unit,
+    onOpenLog: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val savedMessage = stringResource(R.string.mood_saved)
     val sleepSavedMessage = stringResource(R.string.sleep_saved)
     val hideKeyboard = rememberHideKeyboard()
     var sleepTimeField by remember { mutableStateOf<SleepTimeField?>(null) }
@@ -97,28 +96,11 @@ fun CheckInScreen(
         }
     }
 
-    LaunchedEffect(viewModel) {
-        viewModel.openContext.collect { checkInId ->
-            onOpenContext(checkInId)
-        }
-    }
-
-    CollectSavedFeedback(
-        pulses = viewModel.savedFeedback,
-        message = savedMessage,
-        snackbarHostState = snackbarHostState,
-    )
-
     CollectSavedFeedback(
         pulses = viewModel.sleepSavedFeedback,
         message = sleepSavedMessage,
         snackbarHostState = snackbarHostState,
         onPulse = { sleepEditing = false },
-    )
-
-    CollectSnackbarMessages(
-        messages = viewModel.messages,
-        snackbarHostState = snackbarHostState,
     )
 
     Column(
@@ -168,65 +150,15 @@ fun CheckInScreen(
         }
 
         Text(
-            text = stringResource(R.string.mood_label),
-            style = MaterialTheme.typography.titleMedium,
+            text = stringResource(R.string.check_in_log_heading),
+            style = MaterialTheme.typography.titleLarge,
         )
-
-        if (uiState.axesLoaded && uiState.enabledAxes.isEmpty()) {
-            Text(
-                text = stringResource(R.string.check_in_no_axes),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        uiState.enabledAxes.forEach { axis ->
-            CheckInAxisRow(
-                axis = axis,
-                explicitValue = uiState.axisDrafts[axis.id],
-                moodAnchor = uiState.moodAnchor,
-                onValueChange = { viewModel.onAxisChanged(axis.id, it) },
-                onClear = { viewModel.clearAxis(axis.id) },
-            )
-        }
-
-        if (uiState.enabledAxes.any { it.id == DefaultCheckInAxes.MOOD }) {
-            Text(
-                text = stringResource(R.string.predominant_emotion_label),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                uiState.emotionOptions.forEach { option ->
-                    val isSelected = uiState.selectedEmotion == option.name
-                    FilterChip(
-                        selected = isSelected,
-                        onClick = { viewModel.onEmotionSelected(option.name) },
-                        label = { Text(option.name) },
-                    )
-                }
-                FilterChip(
-                    selected = false,
-                    onClick = viewModel::openAddEmotionDialog,
-                    label = { Text(stringResource(R.string.add_activity)) },
-                )
-            }
-        }
-
-        OutlinedTextField(
-            value = uiState.moodNote,
-            onValueChange = viewModel::onMoodNoteChanged,
+        Button(
+            onClick = onOpenLog,
             modifier = Modifier.fillMaxWidth(),
-            label = { Text(stringResource(R.string.mood_note_optional)) },
-            minLines = 2,
-        )
-
-        LoggedAtField(
-            millis = uiState.loggedAtMillis,
-            onChange = viewModel::onLoggedAtChanged,
-        )
+        ) {
+            Text(stringResource(R.string.check_in_add_entry))
+        }
 
         if (uiState.todaySamples.isNotEmpty()) {
             Text(
@@ -246,17 +178,6 @@ fun CheckInScreen(
                     onClick = { editingMood = sample },
                 )
             }
-        }
-
-        Button(
-            onClick = {
-                hideKeyboard()
-                viewModel.saveCheckIn()
-            },
-            enabled = !uiState.isSaving,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-        ) {
-            Text(text = stringResource(R.string.save_mood))
         }
     }
 
@@ -303,6 +224,133 @@ fun CheckInScreen(
         )
     }
 
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun CheckInLogScreen(
+    viewModel: CheckInViewModel,
+    snackbarHostState: SnackbarHostState,
+    onOpenContext: (String) -> Unit,
+    onDiscarded: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val uiState by viewModel.uiState.collectAsState()
+    val hideKeyboard = rememberHideKeyboard()
+    var confirmCancel by remember { mutableStateOf(false) }
+    val busy = uiState.isSaving || uiState.isDiscarding
+
+    BackHandler(enabled = !confirmCancel && !busy) {
+        confirmCancel = true
+    }
+
+    LaunchedEffect(viewModel) {
+        viewModel.openContext.collect { checkInId ->
+            onOpenContext(checkInId)
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .padding(top = 16.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.check_in_log_heading),
+            style = MaterialTheme.typography.headlineMedium,
+        )
+        Text(
+            text = stringResource(R.string.mood_label),
+            style = MaterialTheme.typography.titleMedium,
+        )
+
+        if (uiState.axesLoaded && uiState.enabledAxes.isEmpty()) {
+            Text(
+                text = stringResource(R.string.check_in_no_axes),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        uiState.enabledAxes.forEach { axis ->
+            CheckInAxisRow(
+                axis = axis,
+                explicitValue = uiState.axisDrafts[axis.id],
+                moodAnchor = uiState.moodAnchor,
+                onValueChange = { viewModel.onAxisChanged(axis.id, it) },
+                onClear = { viewModel.clearAxis(axis.id) },
+            )
+        }
+
+        if (uiState.enabledAxes.any { it.id == DefaultCheckInAxes.MOOD }) {
+            Text(
+                text = stringResource(R.string.predominant_emotion_label),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                uiState.emotionOptions.forEach { option ->
+                    FilterChip(
+                        selected = uiState.selectedEmotion == option.name,
+                        onClick = { viewModel.onEmotionSelected(option.name) },
+                        label = { Text(option.name) },
+                    )
+                }
+                FilterChip(
+                    selected = false,
+                    onClick = viewModel::openAddEmotionDialog,
+                    label = { Text(stringResource(R.string.add_activity)) },
+                )
+            }
+        }
+
+        OutlinedTextField(
+            value = uiState.moodNote,
+            onValueChange = viewModel::onMoodNoteChanged,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(stringResource(R.string.mood_note_optional)) },
+            minLines = 2,
+        )
+
+        LoggedAtField(
+            millis = uiState.loggedAtMillis,
+            onChange = viewModel::onLoggedAtChanged,
+        )
+
+        Button(
+            onClick = {
+                hideKeyboard()
+                viewModel.saveCheckIn()
+            },
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(text = stringResource(R.string.save_mood))
+        }
+        OutlinedButton(
+            onClick = { confirmCancel = true },
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(stringResource(R.string.cancel))
+        }
+    }
+
+    if (confirmCancel) {
+        DiscardEntryDialog(
+            onConfirm = {
+                confirmCancel = false
+                viewModel.discardEntry(onDiscarded)
+            },
+            onDismiss = { confirmCancel = false },
+        )
+    }
+
     if (uiState.showAddEmotionDialog) {
         AlertDialog(
             onDismissRequest = viewModel::dismissAddEmotionDialog,
@@ -333,6 +381,28 @@ fun CheckInScreen(
             },
         )
     }
+}
+
+@Composable
+private fun DiscardEntryDialog(
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.check_in_discard_title)) },
+        text = { Text(stringResource(R.string.check_in_discard_message)) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(stringResource(R.string.check_in_discard_confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.check_in_keep_editing))
+            }
+        },
+    )
 }
 
 @Composable
@@ -392,7 +462,7 @@ private fun SleepSummaryCard(
 
             Text(
                 text = stringResource(
-                    if (alreadyLogged) R.string.sleep_logged_title else R.string.sleep_good_morning,
+                    if (alreadyLogged) R.string.sleep_logged_title else R.string.sleep_heading,
                 ),
                 style = MaterialTheme.typography.titleLarge,
             )

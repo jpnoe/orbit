@@ -46,6 +46,7 @@ data class CheckInUiState(
     val showAddEmotionDialog: Boolean = false,
     val newEmotionName: String = "",
     val isSaving: Boolean = false,
+    val isDiscarding: Boolean = false,
     val todaySampleCount: Int = 0,
     val todaySamples: List<MoodSample> = emptyList(),
     val loggedAtMillis: Long = System.currentTimeMillis(),
@@ -94,6 +95,8 @@ class CheckInViewModel(
 
     private var appliedSleepPrefill = false
     private var sleepTimesTouchedByUser = false
+    private var savedCheckInId: String? = null
+    private var savedMoodSampleId: String? = null
 
     init {
         viewModelScope.launch {
@@ -161,6 +164,45 @@ class CheckInViewModel(
                 wakeTimeMillis = suggestion.wakeTimeMillis,
                 sleepPrefillFromHealthConnect = true,
             )
+        }
+    }
+
+    /** The context step was finished, so a later cancel must not delete that check-in. */
+    fun releaseSavedEntry() {
+        savedCheckInId = null
+        savedMoodSampleId = null
+    }
+
+    /**
+     * Drops the in-progress check-in, including a row already saved for the context screen,
+     * and clears the sliders, note, and emotion.
+     */
+    fun discardEntry(onFinished: () -> Unit) {
+        if (_uiState.value.isDiscarding) return
+        _uiState.update { it.copy(isDiscarding = true) }
+        viewModelScope.launch {
+            try {
+                val checkInId = savedCheckInId
+                val moodSampleId = savedMoodSampleId
+                if (checkInId != null) {
+                    checkInRepository.discardCheckIn(checkInId, moodSampleId)
+                    val latest = moodRepository.getLatestSample()
+                    if (latest != null) {
+                        currentMoodStore.restore(latest.moodScore.toFloat(), latest.recordedAt)
+                    } else {
+                        currentMoodStore.restore(CurrentMoodStore.DEFAULT_MOOD, 0L)
+                    }
+                }
+                savedCheckInId = null
+                savedMoodSampleId = null
+                resetDraft()
+                onFinished()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _uiState.update { it.copy(isDiscarding = false) }
+                _messages.trySend(error.message ?: "Could not discard this check-in.")
+            }
         }
     }
 
@@ -310,16 +352,15 @@ class CheckInViewModel(
                 if (cacheUpdate is MoodCacheUpdate.Failed) {
                     Log.w(
                         "CheckInViewModel",
-                        "Mood cache update failed after check-in ${saved.id} was saved",
+                        "Mood cache update failed after check-in ${saved.record.id} was saved",
                         cacheUpdate.error,
                     )
                 }
+                savedCheckInId = saved.record.id
+                savedMoodSampleId = saved.legacyMoodSampleId
                 _uiState.update {
                     it.copy(
                         isSaving = false,
-                        axisDrafts = emptyMap(),
-                        moodNote = "",
-                        selectedEmotion = "",
                         loggedAtMillis = System.currentTimeMillis(),
                         moodAnchor = currentMoodStore.committedMood.value,
                     )
@@ -327,7 +368,7 @@ class CheckInViewModel(
                 _savedFeedback.trySend(Unit)
                 checkInContextNavigationId(
                     validationFailed = false,
-                    savedCheckInId = saved.id,
+                    savedCheckInId = saved.record.id,
                     persistenceFailed = false,
                 )?.let(openContextEvents::onSaved)
             } catch (error: CancellationException) {
@@ -342,6 +383,19 @@ class CheckInViewModel(
     fun updateMood(sample: MoodSample, newScore: Int, newNote: String) {
         viewModelScope.launch {
             moodRepository.updateMood(sample, newScore, newNote)
+        }
+    }
+
+    private fun resetDraft() {
+        _uiState.update {
+            it.copy(
+                isDiscarding = false,
+                axisDrafts = emptyMap(),
+                moodNote = "",
+                selectedEmotion = "",
+                loggedAtMillis = System.currentTimeMillis(),
+                moodAnchor = currentMoodStore.committedMood.value,
+            )
         }
     }
 

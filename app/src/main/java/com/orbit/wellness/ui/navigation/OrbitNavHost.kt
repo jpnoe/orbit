@@ -24,6 +24,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,6 +47,7 @@ import com.orbit.wellness.OrbitApplication
 import com.orbit.wellness.R
 import com.orbit.wellness.ui.activity.ActivityScreen
 import com.orbit.wellness.ui.activity.ActivityViewModel
+import com.orbit.wellness.ui.checkin.CheckInLogScreen
 import com.orbit.wellness.ui.checkin.CheckInScreen
 import com.orbit.wellness.ui.checkin.CheckInViewModel
 import com.orbit.wellness.ui.context.ContextOverviewScreen
@@ -53,6 +55,9 @@ import com.orbit.wellness.ui.context.ContextOverviewViewModel
 import com.orbit.wellness.ui.context.ContextRoutes
 import com.orbit.wellness.ui.context.ContextualActivityScreen
 import com.orbit.wellness.ui.context.ContextualActivityViewModel
+import com.orbit.wellness.ui.context.ContextualWorkoutScreen
+import com.orbit.wellness.ui.context.ContextualWorkoutViewModel
+import com.orbit.wellness.ui.util.CollectSnackbarMessages
 import com.orbit.wellness.ui.util.showBriefMessage
 import com.orbit.wellness.ui.diet.DietScreen
 import com.orbit.wellness.ui.diet.DietViewModel
@@ -82,6 +87,10 @@ enum class OrbitDestination(
     Profile("profile"),
 }
 
+private object CheckInRoutes {
+    const val LOG = "check_in/log"
+}
+
 @Composable
 fun OrbitApp(
     application: OrbitApplication,
@@ -99,6 +108,21 @@ fun OrbitApp(
     val currentRoute = navBackStackEntry.value?.destination?.route
     val activity = LocalContext.current as ComponentActivity
     var dailyGuideActive by rememberSaveable { mutableStateOf(false) }
+
+    val checkInViewModel: CheckInViewModel = viewModel(
+        viewModelStoreOwner = activity,
+        factory = CheckInViewModel.Factory(
+            moodRepository = application.moodRepository,
+            checkInRepository = application.checkInRepository,
+            sleepRepository = application.sleepRepository,
+            currentMoodStore = application.currentMoodStore,
+            biometricRepository = application.biometricRepository,
+        ),
+    )
+    CollectSnackbarMessages(
+        messages = checkInViewModel.messages,
+        snackbarHostState = snackbarHostState,
+    )
 
     val trustedContactsViewModel: TrustedContactsViewModel = viewModel(
         viewModelStoreOwner = activity,
@@ -164,7 +188,8 @@ fun OrbitApp(
             }
         },
         bottomBar = {
-            if (currentRoute?.startsWith("context/") != true) NavigationBar {
+            val inEntryFlow = currentRoute == CheckInRoutes.LOG || currentRoute?.startsWith("context/") == true
+            if (!inEntryFlow) NavigationBar {
                 destinations.forEach { destination ->
                     val selected = currentRoute == destination.route
                     NavigationBarItem(
@@ -209,17 +234,15 @@ fun OrbitApp(
             modifier = Modifier.padding(innerPadding),
         ) {
             composable(OrbitDestination.CheckIn.route) {
-                val viewModel: CheckInViewModel = viewModel(
-                    factory = CheckInViewModel.Factory(
-                        moodRepository = application.moodRepository,
-                        checkInRepository = application.checkInRepository,
-                        sleepRepository = application.sleepRepository,
-                        currentMoodStore = application.currentMoodStore,
-                        biometricRepository = application.biometricRepository,
-                    ),
-                )
                 CheckInScreen(
-                    viewModel = viewModel,
+                    viewModel = checkInViewModel,
+                    snackbarHostState = snackbarHostState,
+                    onOpenLog = { navController.navigate(CheckInRoutes.LOG) },
+                )
+            }
+            composable(CheckInRoutes.LOG) {
+                CheckInLogScreen(
+                    viewModel = checkInViewModel,
                     snackbarHostState = snackbarHostState,
                     onOpenContext = { checkInId ->
                         scope.launch {
@@ -228,6 +251,9 @@ fun OrbitApp(
                         navController.navigate(ContextRoutes.overview(checkInId)) {
                             launchSingleTop = true
                         }
+                    },
+                    onDiscarded = {
+                        navController.popBackStack(OrbitDestination.CheckIn.route, inclusive = false)
                     },
                 )
             }
@@ -244,13 +270,25 @@ fun OrbitApp(
                         checkInRepository = application.checkInRepository,
                     ),
                 )
+                val checkInState by checkInViewModel.uiState.collectAsState()
                 ContextOverviewScreen(
                     viewModel = viewModel,
                     snackbarHostState = snackbarHostState,
-                    onBack = { navController.popBackStack() },
-                    onDone = { navController.leaveContextWorkflow() },
+                    onDone = {
+                        checkInViewModel.releaseSavedEntry()
+                        navController.leaveContextWorkflow()
+                    },
+                    onDiscard = {
+                        checkInViewModel.discardEntry {
+                            navController.popBackStack(OrbitDestination.CheckIn.route, inclusive = false)
+                        }
+                    },
+                    discarding = checkInState.isDiscarding,
                     onOpenActivity = {
                         navController.navigate(ContextRoutes.activity(checkInId))
+                    },
+                    onOpenWorkout = {
+                        navController.navigate(ContextRoutes.workout(checkInId))
                     },
                 )
             }
@@ -269,6 +307,27 @@ fun OrbitApp(
                     ),
                 )
                 ContextualActivityScreen(
+                    viewModel = viewModel,
+                    snackbarHostState = snackbarHostState,
+                    onBack = { navController.popBackStack() },
+                    onFinished = { navController.popBackStack() },
+                )
+            }
+            composable(
+                route = ContextRoutes.WORKOUT,
+                arguments = listOf(
+                    navArgument(ContextRoutes.CHECK_IN_ID) { type = NavType.StringType },
+                ),
+            ) { entry ->
+                val checkInId = entry.arguments?.getString(ContextRoutes.CHECK_IN_ID).orEmpty()
+                val viewModel: ContextualWorkoutViewModel = viewModel(
+                    factory = ContextualWorkoutViewModel.Factory(
+                        checkInId = checkInId,
+                        checkInRepository = application.checkInRepository,
+                        exerciseRepository = application.exerciseRepository,
+                    ),
+                )
+                ContextualWorkoutScreen(
                     viewModel = viewModel,
                     snackbarHostState = snackbarHostState,
                     onBack = { navController.popBackStack() },

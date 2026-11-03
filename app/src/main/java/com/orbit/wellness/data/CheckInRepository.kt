@@ -7,6 +7,7 @@ import com.orbit.wellness.data.local.CheckInContextCategories
 import com.orbit.wellness.data.local.CheckInContextCategory
 import com.orbit.wellness.data.local.CheckInContextStatus
 import com.orbit.wellness.data.local.CheckInContextWindow
+import com.orbit.wellness.data.local.CheckInWorkoutItem
 import com.orbit.wellness.data.local.CheckInDao
 import com.orbit.wellness.data.local.CheckInRecord
 import com.orbit.wellness.data.local.MoodSample
@@ -24,6 +25,7 @@ class CheckInRepository(
     private val moodSamples: MoodSampleWriter = MoodSampleWriter {
         error("Mood sample writer is not configured")
     },
+    private val moodRemover: MoodSampleRemover = MoodSampleRemover { },
     private val transaction: DatabaseTransaction = ImmediateDatabaseTransaction(),
     private val wakeTimes: CheckInWakeTimeSource = CheckInWakeTimeSource { null },
 ) {
@@ -55,6 +57,12 @@ class CheckInRepository(
     suspend fun getActivityItems(checkInId: String): List<CheckInActivityItem> =
         dao.getActivityItems(checkInId)
 
+    fun observeWorkoutItems(checkInId: String): Flow<List<CheckInWorkoutItem>> =
+        dao.observeWorkoutItems(checkInId)
+
+    suspend fun getWorkoutItems(checkInId: String): List<CheckInWorkoutItem> =
+        dao.getWorkoutItems(checkInId)
+
     suspend fun saveCheckIn(
         axisValues: List<CheckInAxisInput>,
         trigger: String,
@@ -63,7 +71,7 @@ class CheckInRepository(
         localDate: String = DateUtils.formatLocalDate(DateUtils.localDateOf(recordedAt)),
         id: String = UUID.randomUUID().toString(),
         legacyMood: LegacyCheckInMood? = null,
-    ): CheckInRecord {
+    ): SavedCheckIn {
         CheckInValidator.validate(axisValues)
         val normalizedTrigger = trigger.trim()
         require(normalizedTrigger.isNotBlank()) {
@@ -116,7 +124,20 @@ class CheckInRepository(
                 moodSamples.insert(moodSample)
             }
         }
-        return record
+        return SavedCheckIn(record = record, legacyMoodSampleId = moodSample?.id)
+    }
+
+    /**
+     * Removes one check-in and its context rows, plus the legacy mood sample from that same submission.
+     */
+    suspend fun discardCheckIn(checkInId: String, legacyMoodSampleId: String?) {
+        require(checkInId.isNotBlank()) { "Check-in id cannot be blank" }
+        transaction.run {
+            dao.deleteCheckIn(checkInId)
+            if (legacyMoodSampleId != null) {
+                moodRemover.delete(legacyMoodSampleId)
+            }
+        }
     }
 
     /**
@@ -157,6 +178,42 @@ class CheckInRepository(
             CheckInContextStatus.ENTRIES
         }
         dao.replaceActivitySelections(
+            checkInId = checkInId,
+            items = items,
+            status = status,
+            reviewedAt = reportedAt,
+        )
+    }
+
+    /**
+     * Replaces contextual workout items for one check-in.
+     * An empty selection is an explicit "none" and does not insert a placeholder item.
+     * This does not read or write detailed workout-event history.
+     */
+    suspend fun saveWorkoutSelections(
+        checkInId: String,
+        selections: List<CheckInWorkoutSelection>,
+        reportedAt: Long = System.currentTimeMillis(),
+    ) {
+        CheckInWorkoutSelections.validate(
+            selections = selections,
+            contextWindowExists = dao.getContextWindow(checkInId) != null,
+        )
+        val items = selections.map { selection ->
+            CheckInWorkoutItem(
+                checkInId = checkInId,
+                workoutOptionId = selection.workoutOptionId,
+                workoutName = selection.workoutName.trim(),
+                durationMinutes = selection.durationMinutes,
+                reportedAt = reportedAt,
+            )
+        }
+        val status = if (items.isEmpty()) {
+            CheckInContextStatus.NONE
+        } else {
+            CheckInContextStatus.ENTRIES
+        }
+        dao.replaceWorkoutSelections(
             checkInId = checkInId,
             items = items,
             status = status,

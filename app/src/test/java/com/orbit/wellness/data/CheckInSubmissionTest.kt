@@ -47,7 +47,7 @@ class CheckInSubmissionTest {
                 ),
             )
         }
-        assertEquals("eight", saved.id)
+        assertEquals("eight", saved.record.id)
         val sample = moods.samples.single()
         assertEquals(localDate, sample.localDate)
         assertEquals(7, sample.moodScore)
@@ -55,7 +55,7 @@ class CheckInSubmissionTest {
         assertEquals("calm", sample.emotion)
         assertEquals(atEight, sample.recordedAt)
         assertEquals(MoodSample.SOURCE_CHECK_IN, sample.source)
-        assertEquals(4, runBlocking { repository.getContextCategories(saved.id) }.size)
+        assertEquals(4, runBlocking { repository.getContextCategories(saved.record.id) }.size)
         assertEquals(7f, committedMoodAfterSubmission(explicitScore = 7, submitted = true))
     }
 
@@ -74,7 +74,7 @@ class CheckInSubmissionTest {
         }
         assertTrue(moods.samples.isEmpty())
         assertNull(committedMoodAfterSubmission(explicitScore = null, submitted = true))
-        assertEquals("eight", runBlocking { repository.getContextWindow(saved.id) }!!.checkInId)
+        assertEquals("eight", runBlocking { repository.getContextWindow(saved.record.id) }!!.checkInId)
     }
 
     @Test
@@ -177,6 +177,46 @@ class CheckInSubmissionTest {
         assertEquals(CheckInContextStatus.NONE, activity.status)
         assertTrue(runBlocking { repository.getActivityItems("eight") }.isEmpty())
     }
+
+    @Test
+    fun discardRemovesTheCheckInContextAndLegacyMoodSample() {
+        val dao = InMemoryCheckInDao()
+        val moods = RecordingMoodSamples()
+        val repository = CheckInRepository(
+            dao = dao,
+            moodSamples = moods,
+            moodRemover = MoodSampleRemover { id -> moods.delete(id) },
+        )
+        val saved = runBlocking {
+            repository.saveCheckIn(
+                axisValues = listOf(CheckInAxisInput(DefaultCheckInAxes.MOOD, 7)),
+                trigger = "manual",
+                note = "note",
+                recordedAt = atEight,
+                localDate = localDate,
+                id = "eight",
+                legacyMood = LegacyCheckInMood(
+                    score = 7,
+                    note = "note",
+                    emotion = "Calm",
+                    recordedAt = atEight,
+                ),
+            )
+        }
+        runBlocking {
+            repository.saveActivitySelections(
+                checkInId = "eight",
+                selections = listOf(CheckInActivitySelection("walk", "Walk")),
+                reportedAt = atEight,
+            )
+            repository.discardCheckIn(saved.record.id, saved.legacyMoodSampleId)
+        }
+        assertNull(runBlocking { dao.getLatest() })
+        assertNull(runBlocking { dao.getContextWindow("eight") })
+        assertTrue(runBlocking { dao.getContextCategories("eight") }.isEmpty())
+        assertTrue(runBlocking { dao.getActivityItems("eight") }.isEmpty())
+        assertTrue(moods.samples.isEmpty())
+    }
 }
 
 private class RecordingMoodSamples : MoodSampleWriter {
@@ -186,6 +226,10 @@ private class RecordingMoodSamples : MoodSampleWriter {
     override suspend fun insert(sample: MoodSample) {
         if (failNextInsert) error("mood insert failed")
         samples += sample
+    }
+
+    suspend fun delete(id: String) {
+        samples.removeAll { it.id == id }
     }
 }
 

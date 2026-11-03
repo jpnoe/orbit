@@ -60,6 +60,9 @@ interface CheckInDao {
     @Insert
     suspend fun insertCheckIn(record: CheckInRecord)
 
+    @Query("DELETE FROM check_ins WHERE id = :checkInId")
+    suspend fun deleteCheckIn(checkInId: String)
+
     @Insert
     suspend fun insertAxisValues(values: List<CheckInAxisValue>)
 
@@ -187,6 +190,49 @@ interface CheckInDao {
         updateCategoryStatus(
             checkInId = checkInId,
             category = CheckInContextCategories.ACTIVITY,
+            status = status,
+            reviewedAt = reviewedAt,
+        )
+    }
+
+    @Query(
+        """
+        SELECT * FROM check_in_workout_items
+        WHERE checkInId = :checkInId
+        ORDER BY rowid ASC
+        """,
+    )
+    fun observeWorkoutItems(checkInId: String): Flow<List<CheckInWorkoutItem>>
+
+    @Query(
+        """
+        SELECT * FROM check_in_workout_items
+        WHERE checkInId = :checkInId
+        ORDER BY rowid ASC
+        """,
+    )
+    suspend fun getWorkoutItems(checkInId: String): List<CheckInWorkoutItem>
+
+    @Query("DELETE FROM check_in_workout_items WHERE checkInId = :checkInId")
+    suspend fun deleteWorkoutItemsForCheckIn(checkInId: String)
+
+    @Insert
+    suspend fun insertWorkoutItems(items: List<CheckInWorkoutItem>)
+
+    @Transaction
+    suspend fun replaceWorkoutSelections(
+        checkInId: String,
+        items: List<CheckInWorkoutItem>,
+        status: String,
+        reviewedAt: Long,
+    ) {
+        deleteWorkoutItemsForCheckIn(checkInId)
+        if (items.isNotEmpty()) {
+            insertWorkoutItems(items)
+        }
+        updateCategoryStatus(
+            checkInId = checkInId,
+            category = CheckInContextCategories.WORKOUT,
             status = status,
             reviewedAt = reviewedAt,
         )

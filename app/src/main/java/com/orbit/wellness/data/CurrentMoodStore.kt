@@ -35,6 +35,14 @@ class CurrentMoodStore(context: Context) {
      * This repairs the cache after process death, including when a check-in
      * was saved and this preference write did not finish.
      */
+    /**
+     * Replaces the cached mood even when [recordedAt] is older.
+     * Used after a check-in is discarded so the cache matches the latest remaining sample.
+     */
+    fun restore(score: Float, recordedAt: Long) {
+        commit(score, recordedAt)
+    }
+
     fun hydrateFromSample(moodScore: Int, recordedAt: Long) {
         if (recordedAt >= committedAt) {
             commit(moodScore.toFloat(), recordedAt)

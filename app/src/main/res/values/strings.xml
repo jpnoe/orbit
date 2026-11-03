@@ -11,7 +11,14 @@
     <string name="journal_today_label">Today</string>
     <string name="edit_journal_title">Edit journal</string>
     <string name="delete_journal_message">Remove this journal entry? You can write a new one afterward.</string>
-    <string name="save_mood">Save check-in</string>
+    <string name="save_mood">Next</string>
+    <string name="save_checkin">Save</string>
+    <string name="check_in_log_heading">Log</string>
+    <string name="check_in_add_entry">+ Entry</string>
+    <string name="check_in_discard_title">Discard this entry?</string>
+    <string name="check_in_discard_message">This entry will be discarded and the sliders will reset.</string>
+    <string name="check_in_discard_confirm">Discard</string>
+    <string name="check_in_keep_editing">Keep editing</string>
     <string name="save_journal">Save journal</string>
     <string name="mood_saved">Check-in saved</string>
     <string name="check_in_not_set">-</string>
@@ -199,7 +206,7 @@
     <string name="mood_source_pre">Before activity</string>
     <string name="mood_source_post">After activity</string>
 
-    <string name="sleep_good_morning">Good morning</string>
+    <string name="sleep_heading">Sleep</string>
     <string name="sleep_logged_title">Today\'s sleep</string>
     <string name="sleep_logged_summary">%1$s → %2$s · quality %3$d</string>
     <string name="sleep_prompt">How did you sleep?</string>
