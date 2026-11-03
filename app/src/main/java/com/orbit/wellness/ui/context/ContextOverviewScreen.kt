@@ -40,16 +40,19 @@ fun ContextOverviewScreen(
     viewModel: ContextOverviewViewModel,
     snackbarHostState: SnackbarHostState,
     onDone: () -> Unit,
+    onSave: () -> Unit,
     onDiscard: () -> Unit,
     discarding: Boolean = false,
+    saving: Boolean = false,
     onOpenActivity: () -> Unit,
     onOpenWorkout: () -> Unit,
+    onOpenUsage: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val overview = uiState.overview
     var confirmCancel by remember { mutableStateOf(false) }
-    val busy = uiState.completing || discarding
+    val busy = uiState.completing || discarding || saving
 
     BackHandler(enabled = !confirmCancel && !busy) {
         confirmCancel = true
@@ -68,7 +71,7 @@ fun ContextOverviewScreen(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp)
-            .padding(top = 8.dp, bottom = 24.dp),
+            .padding(top = 16.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (!uiState.loaded) return@Column
@@ -85,14 +88,6 @@ fun ContextOverviewScreen(
             )
         }
         if (!overview.missing) {
-            Text(
-                text = "What happened in this stretch? This is not a minute-by-minute log.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        if (!overview.missing) {
             overview.cards.chunked(2).forEach { row ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -106,6 +101,8 @@ fun ContextOverviewScreen(
                                     onOpenActivity
                                 card.category == CheckInContextCategories.WORKOUT && card.interactive ->
                                     onOpenWorkout
+                                card.category == CheckInContextCategories.USAGE && card.interactive ->
+                                    onOpenUsage
                                 else -> null
                             },
                             modifier = Modifier.weight(1f),
@@ -120,7 +117,7 @@ fun ContextOverviewScreen(
 
         Button(
             onClick = {
-                if (overview.missing) onDone() else viewModel.finish()
+                if (overview.missing) onDone() else onSave()
             },
             enabled = !busy,
             modifier = Modifier.fillMaxWidth(),

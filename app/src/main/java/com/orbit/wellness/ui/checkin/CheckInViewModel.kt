@@ -14,8 +14,10 @@ import com.orbit.wellness.data.MoodRepository
 import com.orbit.wellness.data.SleepRepository
 import com.orbit.wellness.data.biometrics.BiometricRepository
 import com.orbit.wellness.data.local.CheckInAxis
+import com.orbit.wellness.data.local.CheckInContextWindow
 import com.orbit.wellness.data.local.CheckInRecord
 import com.orbit.wellness.data.local.DefaultCheckInAxes
+import com.orbit.wellness.ui.context.PendingCheckInSession
 import com.orbit.wellness.data.local.EmotionOption
 import com.orbit.wellness.data.local.MoodSample
 import com.orbit.wellness.util.DateUtils
@@ -97,6 +99,9 @@ class CheckInViewModel(
     private var sleepTimesTouchedByUser = false
     private var savedCheckInId: String? = null
     private var savedMoodSampleId: String? = null
+    private var pending: PendingCheckInSession? = null
+
+    fun pendingSession(): PendingCheckInSession? = pending
 
     init {
         viewModelScope.launch {
@@ -167,15 +172,9 @@ class CheckInViewModel(
         }
     }
 
-    /** The context step was finished, so a later cancel must not delete that check-in. */
-    fun releaseSavedEntry() {
-        savedCheckInId = null
-        savedMoodSampleId = null
-    }
-
     /**
-     * Drops the in-progress check-in, including a row already saved for the context screen,
-     * and clears the sliders, note, and emotion.
+     * Drops the in-progress entry. A check-in already written for it is deleted,
+     * and the sliders, note, emotion, and logged time are cleared.
      */
     fun discardEntry(onFinished: () -> Unit) {
         if (_uiState.value.isDiscarding) return
@@ -314,18 +313,52 @@ class CheckInViewModel(
         }
     }
 
-    fun saveCheckIn() {
+    /** Opens the context screen without writing the check-in. */
+    fun openContextDraft() {
         val current = _uiState.value
         if (current.isSaving) return
-
-        val enabledIds = current.enabledAxes.map { it.id }.toSet()
-        val inputs = CheckInDrafts.toAxisInputs(current.axisDrafts)
-            .filter { it.axisId in enabledIds }
+        val inputs = explicitInputs(current)
         if (inputs.isEmpty()) {
             _messages.trySend("Set at least one scale before saving.")
             return
         }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSaving = true) }
+            try {
+                val preview = checkInRepository.previewContext(
+                    recordedAt = current.loggedAtMillis,
+                    checkInId = PendingCheckInSession.ID,
+                )
+                pending = PendingCheckInSession(
+                    CheckInContextWindow(
+                        checkInId = PendingCheckInSession.ID,
+                        previousCheckInId = preview.previousCheckInId,
+                        windowStartAt = preview.windowStartAt,
+                        windowEndAt = preview.windowEndAt,
+                        startBasis = preview.startBasis,
+                    ),
+                )
+                _uiState.update { it.copy(isSaving = false) }
+                openContextEvents.onSaved(PendingCheckInSession.ID)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _uiState.update { it.copy(isSaving = false) }
+                _messages.trySend(error.message ?: "Could not open this check-in.")
+            }
+        }
+    }
 
+    /** Writes the check-in, reviewed context, and completion together. */
+    fun commitEntry(onFinished: () -> Unit) {
+        val current = _uiState.value
+        val session = pending
+        if (current.isSaving || session == null) return
+        val inputs = explicitInputs(current)
+        if (inputs.isEmpty()) {
+            _messages.trySend("Set at least one scale before saving.")
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isSaving = true) }
             try {
@@ -345,6 +378,10 @@ class CheckInViewModel(
                     note = current.moodNote,
                     recordedAt = recordedAt,
                     legacyMood = legacyMood,
+                    activitySelections = session.activity.value,
+                    workoutSelections = session.workout.value,
+                    usageSelections = session.usage.value,
+                    completedAt = System.currentTimeMillis(),
                 )
                 val cacheUpdate = updateMoodCacheAfterSubmission(legacyMood?.score) { score ->
                     currentMoodStore.commit(score, recordedAt)
@@ -356,21 +393,9 @@ class CheckInViewModel(
                         cacheUpdate.error,
                     )
                 }
-                savedCheckInId = saved.record.id
-                savedMoodSampleId = saved.legacyMoodSampleId
-                _uiState.update {
-                    it.copy(
-                        isSaving = false,
-                        loggedAtMillis = System.currentTimeMillis(),
-                        moodAnchor = currentMoodStore.committedMood.value,
-                    )
-                }
+                resetDraft()
                 _savedFeedback.trySend(Unit)
-                checkInContextNavigationId(
-                    validationFailed = false,
-                    savedCheckInId = saved.record.id,
-                    persistenceFailed = false,
-                )?.let(openContextEvents::onSaved)
+                onFinished()
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -380,6 +405,9 @@ class CheckInViewModel(
         }
     }
 
+    private fun explicitInputs(current: CheckInUiState) = CheckInDrafts.toAxisInputs(current.axisDrafts)
+        .filter { it.axisId in current.enabledAxes.map { axis -> axis.id }.toSet() }
+
     fun updateMood(sample: MoodSample, newScore: Int, newNote: String) {
         viewModelScope.launch {
             moodRepository.updateMood(sample, newScore, newNote)
@@ -387,8 +415,10 @@ class CheckInViewModel(
     }
 
     private fun resetDraft() {
+        pending = null
         _uiState.update {
             it.copy(
+                isSaving = false,
                 isDiscarding = false,
                 axisDrafts = emptyMap(),
                 moodNote = "",

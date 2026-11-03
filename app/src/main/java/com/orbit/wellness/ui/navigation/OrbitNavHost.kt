@@ -50,11 +50,14 @@ import com.orbit.wellness.ui.activity.ActivityViewModel
 import com.orbit.wellness.ui.checkin.CheckInLogScreen
 import com.orbit.wellness.ui.checkin.CheckInScreen
 import com.orbit.wellness.ui.checkin.CheckInViewModel
+import com.orbit.wellness.ui.context.PendingCheckInSession
 import com.orbit.wellness.ui.context.ContextOverviewScreen
 import com.orbit.wellness.ui.context.ContextOverviewViewModel
 import com.orbit.wellness.ui.context.ContextRoutes
 import com.orbit.wellness.ui.context.ContextualActivityScreen
 import com.orbit.wellness.ui.context.ContextualActivityViewModel
+import com.orbit.wellness.ui.context.ContextualUsageScreen
+import com.orbit.wellness.ui.context.ContextualUsageViewModel
 import com.orbit.wellness.ui.context.ContextualWorkoutScreen
 import com.orbit.wellness.ui.context.ContextualWorkoutViewModel
 import com.orbit.wellness.ui.util.CollectSnackbarMessages
@@ -245,9 +248,6 @@ fun OrbitApp(
                     viewModel = checkInViewModel,
                     snackbarHostState = snackbarHostState,
                     onOpenContext = { checkInId ->
-                        scope.launch {
-                            snackbarHostState.showBriefMessage(checkInSavedMessage)
-                        }
                         navController.navigate(ContextRoutes.overview(checkInId)) {
                             launchSingleTop = true
                         }
@@ -268,15 +268,25 @@ fun OrbitApp(
                     factory = ContextOverviewViewModel.Factory(
                         checkInId = checkInId,
                         checkInRepository = application.checkInRepository,
+                        pending = checkInViewModel.pendingSession(),
                     ),
                 )
                 val checkInState by checkInViewModel.uiState.collectAsState()
                 ContextOverviewScreen(
                     viewModel = viewModel,
                     snackbarHostState = snackbarHostState,
-                    onDone = {
-                        checkInViewModel.releaseSavedEntry()
-                        navController.leaveContextWorkflow()
+                    onDone = { navController.leaveContextWorkflow() },
+                    onSave = {
+                        if (checkInId == PendingCheckInSession.ID) {
+                            checkInViewModel.commitEntry {
+                                scope.launch {
+                                    snackbarHostState.showBriefMessage(checkInSavedMessage)
+                                }
+                                navController.leaveContextWorkflow()
+                            }
+                        } else {
+                            viewModel.finish()
+                        }
                     },
                     onDiscard = {
                         checkInViewModel.discardEntry {
@@ -284,11 +294,15 @@ fun OrbitApp(
                         }
                     },
                     discarding = checkInState.isDiscarding,
+                    saving = checkInState.isSaving,
                     onOpenActivity = {
                         navController.navigate(ContextRoutes.activity(checkInId))
                     },
                     onOpenWorkout = {
                         navController.navigate(ContextRoutes.workout(checkInId))
+                    },
+                    onOpenUsage = {
+                        navController.navigate(ContextRoutes.usage(checkInId))
                     },
                 )
             }
@@ -304,6 +318,7 @@ fun OrbitApp(
                         checkInId = checkInId,
                         checkInRepository = application.checkInRepository,
                         activityRepository = application.activityRepository,
+                        pending = checkInViewModel.pendingSession(),
                     ),
                 )
                 ContextualActivityScreen(
@@ -325,9 +340,32 @@ fun OrbitApp(
                         checkInId = checkInId,
                         checkInRepository = application.checkInRepository,
                         exerciseRepository = application.exerciseRepository,
+                        pending = checkInViewModel.pendingSession(),
                     ),
                 )
                 ContextualWorkoutScreen(
+                    viewModel = viewModel,
+                    snackbarHostState = snackbarHostState,
+                    onBack = { navController.popBackStack() },
+                    onFinished = { navController.popBackStack() },
+                )
+            }
+            composable(
+                route = ContextRoutes.USAGE,
+                arguments = listOf(
+                    navArgument(ContextRoutes.CHECK_IN_ID) { type = NavType.StringType },
+                ),
+            ) { entry ->
+                val checkInId = entry.arguments?.getString(ContextRoutes.CHECK_IN_ID).orEmpty()
+                val viewModel: ContextualUsageViewModel = viewModel(
+                    factory = ContextualUsageViewModel.Factory(
+                        checkInId = checkInId,
+                        checkInRepository = application.checkInRepository,
+                        substanceRepository = application.substanceRepository,
+                        pending = checkInViewModel.pendingSession(),
+                    ),
+                )
+                ContextualUsageScreen(
                     viewModel = viewModel,
                     snackbarHostState = snackbarHostState,
                     onBack = { navController.popBackStack() },

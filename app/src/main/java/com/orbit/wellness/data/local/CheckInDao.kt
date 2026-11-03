@@ -237,4 +237,47 @@ interface CheckInDao {
             reviewedAt = reviewedAt,
         )
     }
+
+    @Query(
+        """
+        SELECT * FROM check_in_usage_items
+        WHERE checkInId = :checkInId
+        ORDER BY rowid ASC
+        """,
+    )
+    fun observeUsageItems(checkInId: String): Flow<List<CheckInUsageItem>>
+
+    @Query(
+        """
+        SELECT * FROM check_in_usage_items
+        WHERE checkInId = :checkInId
+        ORDER BY rowid ASC
+        """,
+    )
+    suspend fun getUsageItems(checkInId: String): List<CheckInUsageItem>
+
+    @Query("DELETE FROM check_in_usage_items WHERE checkInId = :checkInId")
+    suspend fun deleteUsageItemsForCheckIn(checkInId: String)
+
+    @Insert
+    suspend fun insertUsageItems(items: List<CheckInUsageItem>)
+
+    @Transaction
+    suspend fun replaceUsageSelections(
+        checkInId: String,
+        items: List<CheckInUsageItem>,
+        status: String,
+        reviewedAt: Long,
+    ) {
+        deleteUsageItemsForCheckIn(checkInId)
+        if (items.isNotEmpty()) {
+            insertUsageItems(items)
+        }
+        updateCategoryStatus(
+            checkInId = checkInId,
+            category = CheckInContextCategories.USAGE,
+            status = status,
+            reviewedAt = reviewedAt,
+        )
+    }
 }

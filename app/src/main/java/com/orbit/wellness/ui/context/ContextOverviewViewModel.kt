@@ -23,6 +23,7 @@ data class ContextOverviewUiState(
 class ContextOverviewViewModel(
     private val checkInId: String,
     private val checkInRepository: CheckInRepository,
+    private val pending: PendingCheckInSession? = null,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ContextOverviewUiState())
@@ -60,11 +61,25 @@ class ContextOverviewViewModel(
     }
 
     init {
-        if (checkInId.isBlank()) {
+        if (checkInId.isBlank() || (checkInId == PendingCheckInSession.ID && pending == null)) {
             _uiState.value = ContextOverviewUiState(
                 loaded = true,
                 overview = ContextOverviewModel(missing = true, title = ContextOverviewCopy.MISSING),
             )
+        } else if (pending != null && checkInId == PendingCheckInSession.ID) {
+            viewModelScope.launch {
+                combine(pending.activity, pending.workout, pending.usage) { _, _, _ ->
+                    ContextOverviewCopy.present(
+                        window = pending.window,
+                        categories = pending.categoryRows(),
+                        activityItems = pending.activityItems(),
+                        workoutItems = pending.workoutItems(),
+                        usageItems = pending.usageItems(),
+                    )
+                }.collect { overview ->
+                    _uiState.update { it.copy(loaded = true, overview = overview) }
+                }
+            }
         } else {
             viewModelScope.launch {
                 combine(
@@ -72,8 +87,15 @@ class ContextOverviewViewModel(
                     checkInRepository.observeContextCategories(checkInId),
                     checkInRepository.observeActivityItems(checkInId),
                     checkInRepository.observeWorkoutItems(checkInId),
-                ) { window, categories, activityItems, workoutItems ->
-                    ContextOverviewCopy.present(window, categories, activityItems, workoutItems)
+                    checkInRepository.observeUsageItems(checkInId),
+                ) { window, categories, activityItems, workoutItems, usageItems ->
+                    ContextOverviewCopy.present(
+                        window,
+                        categories,
+                        activityItems,
+                        workoutItems,
+                        usageItems,
+                    )
                 }.collect { overview ->
                     _uiState.update { it.copy(loaded = true, overview = overview) }
                 }
@@ -84,10 +106,11 @@ class ContextOverviewViewModel(
     class Factory(
         private val checkInId: String,
         private val checkInRepository: CheckInRepository,
+        private val pending: PendingCheckInSession? = null,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return ContextOverviewViewModel(checkInId, checkInRepository) as T
+            return ContextOverviewViewModel(checkInId, checkInRepository, pending) as T
         }
     }
 }

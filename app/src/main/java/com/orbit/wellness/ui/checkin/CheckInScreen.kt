@@ -116,18 +116,6 @@ fun CheckInScreen(
             style = MaterialTheme.typography.headlineMedium,
         )
 
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            ),
-        ) {
-            Text(
-                text = stringResource(R.string.privacy_note),
-                modifier = Modifier.padding(16.dp),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-
         if (uiState.sleepLoaded) {
             SleepSummaryCard(
                 alreadyLogged = uiState.hasLoggedSleepToday,
@@ -325,7 +313,7 @@ fun CheckInLogScreen(
         Button(
             onClick = {
                 hideKeyboard()
-                viewModel.saveCheckIn()
+                viewModel.openContextDraft()
             },
             enabled = !busy,
             modifier = Modifier.fillMaxWidth(),

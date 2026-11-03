@@ -217,6 +217,47 @@ class CheckInSubmissionTest {
         assertTrue(runBlocking { dao.getActivityItems("eight") }.isEmpty())
         assertTrue(moods.samples.isEmpty())
     }
+
+    @Test
+    fun previewWritesNothingAndSaveCanFinishReviewedCategoriesTogether() {
+        val dao = InMemoryCheckInDao()
+        val repository = CheckInRepository(dao)
+        val preview = runBlocking { repository.previewContext(atEight, "pending") }
+        assertNull(runBlocking { dao.getLatest() })
+        assertEquals(atEight, preview.windowEndAt)
+        runBlocking {
+            repository.saveCheckIn(
+                axisValues = listOf(CheckInAxisInput(DefaultCheckInAxes.MOOD, 6)),
+                trigger = "manual",
+                recordedAt = atEight,
+                localDate = localDate,
+                id = "eight",
+                activitySelections = listOf(CheckInActivitySelection("walk", "Walk")),
+                workoutSelections = emptyList(),
+                completedAt = atEight + 1,
+            )
+        }
+        val categories = runBlocking { repository.getContextCategories("eight") }
+        assertEquals(
+            CheckInContextStatus.ENTRIES,
+            categories.first { it.category == CheckInContextCategories.ACTIVITY }.status,
+        )
+        assertEquals(
+            CheckInContextStatus.NONE,
+            categories.first { it.category == CheckInContextCategories.WORKOUT }.status,
+        )
+        assertEquals(
+            CheckInContextStatus.UNREVIEWED,
+            categories.first { it.category == CheckInContextCategories.USAGE }.status,
+        )
+        assertEquals(
+            CheckInContextStatus.UNREVIEWED,
+            categories.first { it.category == CheckInContextCategories.DIET }.status,
+        )
+        assertEquals(atEight + 1, runBlocking { repository.getContextWindow("eight") }!!.completedAt)
+        assertEquals(listOf("Walk"), runBlocking { repository.getActivityItems("eight") }.map { it.activityName })
+        assertTrue(runBlocking { repository.getWorkoutItems("eight") }.isEmpty())
+    }
 }
 
 private class RecordingMoodSamples : MoodSampleWriter {

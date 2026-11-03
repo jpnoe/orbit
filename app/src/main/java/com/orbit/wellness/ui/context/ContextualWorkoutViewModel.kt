@@ -38,6 +38,7 @@ class ContextualWorkoutViewModel(
     private val checkInId: String,
     private val checkInRepository: CheckInRepository,
     private val exerciseRepository: ExerciseRepository,
+    private val pending: PendingCheckInSession? = null,
 ) : ViewModel() {
 
     private val draft = ContextualWorkoutDraft()
@@ -53,6 +54,18 @@ class ContextualWorkoutViewModel(
     init {
         if (checkInId.isBlank()) {
             _uiState.value = ContextualWorkoutUiState(loaded = true, missing = true)
+        } else if (pending != null && checkInId == PendingCheckInSession.ID) {
+            viewModelScope.launch {
+                combine(pending.workout, exerciseRepository.observeOptions()) { selections, options ->
+                    selections to options
+                }.collect { (selections, options) ->
+                    if (selections != null) {
+                        draft.onSavedItems(pending.workoutItems())
+                    }
+                    draft.onOptions(options)
+                    publish(pending.window, options)
+                }
+            }
         } else {
             viewModelScope.launch {
                 combine(
@@ -155,6 +168,11 @@ class ContextualWorkoutViewModel(
     }
 
     private fun commit(commit: WorkoutReviewCommit) {
+        if (pending != null && commit is WorkoutReviewCommit.Replace) {
+            pending.stageWorkout(commit.selections)
+            _finished.trySend(Unit)
+            return
+        }
         _uiState.update { it.copy(isSaving = true) }
         viewModelScope.launch {
             try {
@@ -222,6 +240,7 @@ class ContextualWorkoutViewModel(
         private val checkInId: String,
         private val checkInRepository: CheckInRepository,
         private val exerciseRepository: ExerciseRepository,
+        private val pending: PendingCheckInSession? = null,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -229,6 +248,7 @@ class ContextualWorkoutViewModel(
                 checkInId,
                 checkInRepository,
                 exerciseRepository,
+                pending,
             ) as T
         }
     }

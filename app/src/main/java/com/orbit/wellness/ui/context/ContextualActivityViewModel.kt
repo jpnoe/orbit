@@ -33,6 +33,7 @@ class ContextualActivityViewModel(
     private val checkInId: String,
     private val checkInRepository: CheckInRepository,
     private val activityRepository: ActivityRepository,
+    private val pending: PendingCheckInSession? = null,
 ) : ViewModel() {
 
     private val selection = ContextualActivitySelection()
@@ -48,6 +49,18 @@ class ContextualActivityViewModel(
     init {
         if (checkInId.isBlank()) {
             _uiState.value = ContextualActivityUiState(loaded = true, missing = true)
+        } else if (pending != null && checkInId == PendingCheckInSession.ID) {
+            viewModelScope.launch {
+                combine(pending.activity, activityRepository.observeOptions()) { selections, options ->
+                    selections to options
+                }.collect { (selections, options) ->
+                    if (selections != null) {
+                        selection.onSavedItems(selections.map { it.activityOptionId })
+                    }
+                    selection.onOptions(options)
+                    publish(pending.window, options)
+                }
+            }
         } else {
             viewModelScope.launch {
                 combine(
@@ -59,16 +72,7 @@ class ContextualActivityViewModel(
                 }.collect { (window, items, options) ->
                     selection.onSavedItems(items.map { it.activityOptionId })
                     selection.onOptions(options)
-                    _uiState.update { state ->
-                        state.copy(
-                            loaded = true,
-                            missing = window == null,
-                            title = window?.let { headingTitle(it) }.orEmpty(),
-                            detail = window?.let { headingDetail(it) },
-                            options = options,
-                            selectedIds = selection.selectedIds,
-                        )
-                    }
+                    publish(window, options)
                 }
             }
         }
@@ -126,6 +130,11 @@ class ContextualActivityViewModel(
     }
 
     private fun commit(commit: ActivityReviewCommit) {
+        if (pending != null && commit is ActivityReviewCommit.Replace) {
+            pending.stageActivity(commit.selections)
+            _finished.trySend(Unit)
+            return
+        }
         _uiState.update { it.copy(isSaving = true, selectedIds = selection.selectedIds) }
         viewModelScope.launch {
             try {
@@ -141,6 +150,19 @@ class ContextualActivityViewModel(
         }
     }
 
+    private fun publish(window: CheckInContextWindow?, options: List<ActivityOption>) {
+        _uiState.update { state ->
+            state.copy(
+                loaded = true,
+                missing = window == null,
+                title = window?.let { headingTitle(it) }.orEmpty(),
+                detail = window?.let { headingDetail(it) },
+                options = options,
+                selectedIds = selection.selectedIds,
+            )
+        }
+    }
+
     private fun headingTitle(window: CheckInContextWindow): String {
         return ContextOverviewCopy.heading(window.startBasis, window.windowStartAt, java.time.ZoneId.systemDefault()).first
     }
@@ -153,6 +175,7 @@ class ContextualActivityViewModel(
         private val checkInId: String,
         private val checkInRepository: CheckInRepository,
         private val activityRepository: ActivityRepository,
+        private val pending: PendingCheckInSession? = null,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -160,6 +183,7 @@ class ContextualActivityViewModel(
                 checkInId,
                 checkInRepository,
                 activityRepository,
+                pending,
             ) as T
         }
     }

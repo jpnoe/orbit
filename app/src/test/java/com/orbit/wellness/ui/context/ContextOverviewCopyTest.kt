@@ -2,7 +2,9 @@ package com.orbit.wellness.ui.context
 
 import com.orbit.wellness.data.local.CheckInActivityItem
 import com.orbit.wellness.data.local.CheckInContextCategories
+import com.orbit.wellness.data.local.CheckInUsageItem
 import com.orbit.wellness.data.local.CheckInWorkoutItem
+import com.orbit.wellness.data.local.SubstanceIntent
 import com.orbit.wellness.data.local.CheckInContextCategory
 import com.orbit.wellness.data.local.CheckInContextStartBasis
 import com.orbit.wellness.data.local.CheckInContextStatus
@@ -96,7 +98,42 @@ class ContextOverviewCopyTest {
     }
 
     @Test
-    fun activityAndWorkoutAreInteractiveAndDietAndUsageStayComingNext() {
+    fun usageSummariesCoverNoneOneAndIntentGroups() {
+        val medication = usageItem("Medication", SubstanceIntent.SUPPORTIVE.name, "10 mg")
+        assertEquals(
+            ContextOverviewCopy.NOT_REVIEWED,
+            ContextOverviewCopy.usageStatusText(CheckInContextStatus.UNREVIEWED, emptyList()),
+        )
+        assertEquals(
+            ContextOverviewCopy.NONE,
+            ContextOverviewCopy.usageStatusText(CheckInContextStatus.NONE, emptyList()),
+        )
+        assertEquals(
+            "Medication · 10 mg",
+            ContextOverviewCopy.usageStatusText(CheckInContextStatus.ENTRIES, listOf(medication)),
+        )
+        assertEquals(
+            "Medication",
+            ContextOverviewCopy.usageStatusText(
+                CheckInContextStatus.ENTRIES,
+                listOf(medication.copy(amount = "")),
+            ),
+        )
+        assertEquals(
+            "3 items · 2 supportive · 1 coping",
+            ContextOverviewCopy.usageStatusText(
+                CheckInContextStatus.ENTRIES,
+                listOf(
+                    medication,
+                    usageItem("Magnesium", SubstanceIntent.SUPPORTIVE.name, ""),
+                    usageItem("Alcohol", SubstanceIntent.COPING.name, "2 drinks"),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun activityWorkoutAndUsageAreInteractiveAndDietStaysComingNext() {
         val window = CheckInContextWindow(
             checkInId = "check-in",
             previousCheckInId = null,
@@ -108,13 +145,10 @@ class ContextOverviewCopyTest {
             CheckInContextCategory(
                 checkInId = "check-in",
                 category = category,
-                status = if (
-                    category == CheckInContextCategories.ACTIVITY ||
-                    category == CheckInContextCategories.WORKOUT
-                ) {
-                    CheckInContextStatus.ENTRIES
-                } else {
+                status = if (category == CheckInContextCategories.DIET) {
                     CheckInContextStatus.UNREVIEWED
+                } else {
+                    CheckInContextStatus.ENTRIES
                 },
             )
         }
@@ -138,6 +172,9 @@ class ContextOverviewCopyTest {
                     reportedAt = 1_000L,
                 ),
             ),
+            usageItems = listOf(
+                usageItem("Medication", SubstanceIntent.SUPPORTIVE.name, "10 mg"),
+            ),
             zone = ZoneOffset.UTC,
         )
         val activity = overview.cards.first { it.category == CheckInContextCategories.ACTIVITY }
@@ -148,15 +185,24 @@ class ContextOverviewCopyTest {
         assertTrue(workout.interactive)
         assertFalse(workout.comingNext)
         assertEquals("Cardio · 30 min", workout.statusText)
-        overview.cards.filter {
-            it.category != CheckInContextCategories.ACTIVITY &&
-                it.category != CheckInContextCategories.WORKOUT
-        }.forEach { card ->
-            assertFalse(card.interactive)
-            assertTrue(card.comingNext)
-            assertEquals(ContextOverviewCopy.NOT_REVIEWED, card.statusText)
-        }
+        val usage = overview.cards.first { it.category == CheckInContextCategories.USAGE }
+        assertTrue(usage.interactive)
+        assertFalse(usage.comingNext)
+        assertEquals("Medication · 10 mg", usage.statusText)
+        val diet = overview.cards.first { it.category == CheckInContextCategories.DIET }
+        assertFalse(diet.interactive)
+        assertTrue(diet.comingNext)
+        assertEquals(ContextOverviewCopy.NOT_REVIEWED, diet.statusText)
     }
+
+    private fun usageItem(name: String, intent: String, amount: String) = CheckInUsageItem(
+        checkInId = "check-in",
+        substanceOptionId = name.lowercase(),
+        name = name,
+        intent = intent,
+        amount = amount,
+        reportedAt = 1_000L,
+    )
 
     @Test
     fun missingWindowIsRecoverable() {

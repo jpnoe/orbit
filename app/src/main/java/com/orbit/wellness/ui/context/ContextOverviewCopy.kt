@@ -2,7 +2,9 @@ package com.orbit.wellness.ui.context
 
 import com.orbit.wellness.data.local.CheckInActivityItem
 import com.orbit.wellness.data.local.CheckInContextCategories
+import com.orbit.wellness.data.local.CheckInUsageItem
 import com.orbit.wellness.data.local.CheckInWorkoutItem
+import com.orbit.wellness.data.local.SubstanceIntent
 import com.orbit.wellness.data.local.CheckInContextCategory
 import com.orbit.wellness.data.local.CheckInContextStartBasis
 import com.orbit.wellness.data.local.CheckInContextStatus
@@ -39,6 +41,7 @@ object ContextOverviewCopy {
         categories: List<CheckInContextCategory>,
         activityItems: List<CheckInActivityItem>,
         workoutItems: List<CheckInWorkoutItem> = emptyList(),
+        usageItems: List<CheckInUsageItem> = emptyList(),
         zone: ZoneId = ZoneId.systemDefault(),
     ): ContextOverviewModel {
         if (window == null) {
@@ -49,7 +52,8 @@ object ContextOverviewCopy {
         val cards = CheckInContextCategories.ALL.map { category ->
             val status = byCategory[category]?.status ?: CheckInContextStatus.UNREVIEWED
             val interactive = category == CheckInContextCategories.ACTIVITY ||
-                category == CheckInContextCategories.WORKOUT
+                category == CheckInContextCategories.WORKOUT ||
+                category == CheckInContextCategories.USAGE
             ContextCategoryCardModel(
                 category = category,
                 title = categoryTitle(category),
@@ -62,6 +66,7 @@ object ContextOverviewCopy {
                         status,
                         workoutItems.map { it.workoutName to it.durationMinutes },
                     )
+                    CheckInContextCategories.USAGE -> usageStatusText(status, usageItems)
                     else -> passiveStatusText(status)
                 },
                 interactive = interactive,
@@ -105,6 +110,25 @@ object ContextOverviewCopy {
                 0 -> NOT_REVIEWED
                 1 -> "${workouts.first().first} · ${workouts.first().second} min"
                 else -> "${workouts.size} workouts · ${workouts.sumOf { it.second }} min"
+            }
+            else -> NOT_REVIEWED
+        }
+    }
+
+    fun usageStatusText(status: String, items: List<CheckInUsageItem>): String {
+        return when (status) {
+            CheckInContextStatus.NONE -> NONE
+            CheckInContextStatus.ENTRIES -> when (items.size) {
+                0 -> NOT_REVIEWED
+                1 -> {
+                    val item = items.first()
+                    if (item.amount.isBlank()) item.name else "${item.name} · ${item.amount}"
+                }
+                else -> {
+                    val supportive = items.count { it.intent == SubstanceIntent.SUPPORTIVE.name }
+                    val coping = items.count { it.intent == SubstanceIntent.COPING.name }
+                    "${items.size} items · $supportive supportive · $coping coping"
+                }
             }
             else -> NOT_REVIEWED
         }

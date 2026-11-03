@@ -7,6 +7,7 @@ import com.orbit.wellness.data.local.CheckInContextCategory
 import com.orbit.wellness.data.local.CheckInContextWindow
 import com.orbit.wellness.data.local.CheckInDao
 import com.orbit.wellness.data.local.CheckInRecord
+import com.orbit.wellness.data.local.CheckInUsageItem
 import com.orbit.wellness.data.local.CheckInWorkoutItem
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,6 +23,7 @@ class InMemoryCheckInDao : CheckInDao {
     private val categories = MutableStateFlow<List<CheckInContextCategory>>(emptyList())
     private val activityItems = MutableStateFlow<List<CheckInActivityItem>>(emptyList())
     private val workoutItems = MutableStateFlow<List<CheckInWorkoutItem>>(emptyList())
+    private val usageItems = MutableStateFlow<List<CheckInUsageItem>>(emptyList())
 
     override fun observeEnabledAxes(): Flow<List<CheckInAxis>> = MutableStateFlow(emptyList())
 
@@ -53,6 +55,7 @@ class InMemoryCheckInDao : CheckInDao {
         categories.value = categories.value.filterNot { it.checkInId == checkInId }
         activityItems.value = activityItems.value.filterNot { it.checkInId == checkInId }
         workoutItems.value = workoutItems.value.filterNot { it.checkInId == checkInId }
+        usageItems.value = usageItems.value.filterNot { it.checkInId == checkInId }
         if (inserted?.id == checkInId) inserted = null
     }
 
@@ -113,6 +116,7 @@ class InMemoryCheckInDao : CheckInDao {
         categories = categories.value,
         activityItems = activityItems.value,
         workoutItems = workoutItems.value,
+        usageItems = usageItems.value,
         inserted = inserted,
     )
 
@@ -125,6 +129,7 @@ class InMemoryCheckInDao : CheckInDao {
         categories.value = snapshot.categories
         activityItems.value = snapshot.activityItems
         workoutItems.value = snapshot.workoutItems
+        usageItems.value = snapshot.usageItems
         inserted = snapshot.inserted
     }
 
@@ -156,6 +161,20 @@ class InMemoryCheckInDao : CheckInDao {
     override suspend fun insertWorkoutItems(items: List<CheckInWorkoutItem>) {
         workoutItems.value = workoutItems.value + items
     }
+
+    override fun observeUsageItems(checkInId: String): Flow<List<CheckInUsageItem>> =
+        usageItems.map { rows -> rows.filter { it.checkInId == checkInId } }
+
+    override suspend fun getUsageItems(checkInId: String): List<CheckInUsageItem> =
+        usageItems.value.filter { it.checkInId == checkInId }
+
+    override suspend fun deleteUsageItemsForCheckIn(checkInId: String) {
+        usageItems.value = usageItems.value.filterNot { it.checkInId == checkInId }
+    }
+
+    override suspend fun insertUsageItems(items: List<CheckInUsageItem>) {
+        usageItems.value = usageItems.value + items
+    }
 }
 
 data class CheckInDaoSnapshot(
@@ -165,5 +184,6 @@ data class CheckInDaoSnapshot(
     val categories: List<CheckInContextCategory>,
     val activityItems: List<CheckInActivityItem>,
     val workoutItems: List<CheckInWorkoutItem>,
+    val usageItems: List<CheckInUsageItem>,
     val inserted: CheckInRecord?,
 )

@@ -45,6 +45,30 @@ class CheckInRepositoryTest {
     }
 
     @Test
+    fun migration19To20IsRegistered() {
+        val migration = OrbitMigrations.ALL.single { it.startVersion == 19 && it.endVersion == 20 }
+        assertEquals(19, migration.startVersion)
+        assertEquals(20, migration.endVersion)
+    }
+
+    @Test
+    fun exportedSchema20AddsContextualUsageWithoutChangingSubstanceEvents() {
+        val current = schemaFile("20.json").readText()
+        val previous = schemaFile("19.json").readText()
+        assertTrue(current.contains("\"version\": 20"))
+        assertEquals(createSql(previous, "substance_use_events"), createSql(current, "substance_use_events"))
+        assertEquals(createSql(previous, "check_in_activity_items"), createSql(current, "check_in_activity_items"))
+        assertEquals(createSql(previous, "check_in_workout_items"), createSql(current, "check_in_workout_items"))
+        val items = createSql(current, "check_in_usage_items")
+        assertTrue(items.contains("REFERENCES `check_in_context_windows`(`checkInId`)"))
+        assertTrue(items.contains("ON DELETE CASCADE"))
+        assertTrue(items.contains("`intent` TEXT NOT NULL"))
+        assertTrue(items.contains("`amount` TEXT NOT NULL"))
+        assertTrue(items.contains("`substanceOptionId` TEXT"))
+        assertTrue(!items.contains("substance_options"))
+    }
+
+    @Test
     fun migration18To19IsRegistered() {
         val migration = OrbitMigrations.ALL.single { it.startVersion == 18 && it.endVersion == 19 }
         assertEquals(18, migration.startVersion)

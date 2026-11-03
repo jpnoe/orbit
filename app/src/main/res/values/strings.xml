@@ -16,9 +16,16 @@
     <string name="check_in_log_heading">Log</string>
     <string name="check_in_add_entry">+ Entry</string>
     <string name="check_in_discard_title">Discard this entry?</string>
-    <string name="check_in_discard_message">This entry will be discarded and the sliders will reset.</string>
+    <string name="check_in_discard_message">This cancels the check-in and clears the sliders.</string>
     <string name="check_in_discard_confirm">Discard</string>
     <string name="check_in_keep_editing">Keep editing</string>
+    <string name="usage_title">Usage</string>
+    <string name="save_usage">Save usage</string>
+    <string name="no_usage_to_report">No usage to report</string>
+    <string name="usage_amount_optional">Amount (optional)</string>
+    <string name="usage_context_hint">Choose what belonged to this stretch. There is no exact time.</string>
+    <string name="add_supportive_option">Add supportive option</string>
+    <string name="add_coping_option">Add coping option</string>
     <string name="save_journal">Save journal</string>
     <string name="mood_saved">Check-in saved</string>
     <string name="check_in_not_set">-</string>

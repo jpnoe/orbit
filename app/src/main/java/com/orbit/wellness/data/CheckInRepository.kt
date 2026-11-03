@@ -7,11 +7,12 @@ import com.orbit.wellness.data.local.CheckInContextCategories
 import com.orbit.wellness.data.local.CheckInContextCategory
 import com.orbit.wellness.data.local.CheckInContextStatus
 import com.orbit.wellness.data.local.CheckInContextWindow
+import com.orbit.wellness.util.DateUtils
+import com.orbit.wellness.data.local.CheckInUsageItem
 import com.orbit.wellness.data.local.CheckInWorkoutItem
 import com.orbit.wellness.data.local.CheckInDao
 import com.orbit.wellness.data.local.CheckInRecord
 import com.orbit.wellness.data.local.MoodSample
-import com.orbit.wellness.util.DateUtils
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.util.UUID
@@ -63,6 +64,12 @@ class CheckInRepository(
     suspend fun getWorkoutItems(checkInId: String): List<CheckInWorkoutItem> =
         dao.getWorkoutItems(checkInId)
 
+    fun observeUsageItems(checkInId: String): Flow<List<CheckInUsageItem>> =
+        dao.observeUsageItems(checkInId)
+
+    suspend fun getUsageItems(checkInId: String): List<CheckInUsageItem> =
+        dao.getUsageItems(checkInId)
+
     suspend fun saveCheckIn(
         axisValues: List<CheckInAxisInput>,
         trigger: String,
@@ -71,8 +78,15 @@ class CheckInRepository(
         localDate: String = DateUtils.formatLocalDate(DateUtils.localDateOf(recordedAt)),
         id: String = UUID.randomUUID().toString(),
         legacyMood: LegacyCheckInMood? = null,
+        activitySelections: List<CheckInActivitySelection>? = null,
+        workoutSelections: List<CheckInWorkoutSelection>? = null,
+        usageSelections: List<CheckInUsageSelection>? = null,
+        completedAt: Long? = null,
     ): SavedCheckIn {
         CheckInValidator.validate(axisValues)
+        activitySelections?.let { CheckInActivitySelections.validate(it, contextWindowExists = true) }
+        workoutSelections?.let { CheckInWorkoutSelections.validate(it, contextWindowExists = true) }
+        usageSelections?.let { CheckInUsageSelections.validate(it, contextWindowExists = true) }
         val normalizedTrigger = trigger.trim()
         require(normalizedTrigger.isNotBlank()) {
             "Check-in trigger must not be blank"
@@ -123,8 +137,38 @@ class CheckInRepository(
             if (moodSample != null) {
                 moodSamples.insert(moodSample)
             }
+            if (activitySelections != null) {
+                saveActivitySelections(record.id, activitySelections, recordedAt)
+            }
+            if (workoutSelections != null) {
+                saveWorkoutSelections(record.id, workoutSelections, recordedAt)
+            }
+            if (usageSelections != null) {
+                saveUsageSelections(record.id, usageSelections, recordedAt)
+            }
+            if (completedAt != null) {
+                dao.completeContextIfUnset(record.id, completedAt)
+            }
         }
         return SavedCheckIn(record = record, legacyMoodSampleId = moodSample?.id)
+    }
+
+    suspend fun previewContext(recordedAt: Long, checkInId: String): ResolvedContextWindow {
+        val localDate = DateUtils.formatLocalDate(DateUtils.localDateOf(recordedAt))
+        return CheckInContextBoundary.resolve(
+            checkInId = checkInId,
+            localDate = localDate,
+            recordedAt = recordedAt,
+            dayStartAt = DateUtils.atTimeMillis(DateUtils.parseLocalDate(localDate), 0, 0),
+            sameDayCheckIns = dao.getCheckInsOnDate(localDate).map { existing ->
+                PriorCheckIn(
+                    id = existing.id,
+                    localDate = existing.localDate,
+                    recordedAt = existing.recordedAt,
+                )
+            },
+            wakeTimeAt = wakeTimes.wakeTimeFor(localDate),
+        )
     }
 
     /**
@@ -214,6 +258,43 @@ class CheckInRepository(
             CheckInContextStatus.ENTRIES
         }
         dao.replaceWorkoutSelections(
+            checkInId = checkInId,
+            items = items,
+            status = status,
+            reviewedAt = reportedAt,
+        )
+    }
+
+    /**
+     * Replaces contextual usage items for one check-in.
+     * An empty selection is an explicit "none" and does not insert a placeholder item.
+     * This does not read or write detailed substance-use history.
+     */
+    suspend fun saveUsageSelections(
+        checkInId: String,
+        selections: List<CheckInUsageSelection>,
+        reportedAt: Long = System.currentTimeMillis(),
+    ) {
+        CheckInUsageSelections.validate(
+            selections = selections,
+            contextWindowExists = dao.getContextWindow(checkInId) != null,
+        )
+        val items = selections.map { selection ->
+            CheckInUsageItem(
+                checkInId = checkInId,
+                substanceOptionId = selection.substanceOptionId,
+                name = selection.name.trim(),
+                intent = selection.intent,
+                amount = selection.amount.trim(),
+                reportedAt = reportedAt,
+            )
+        }
+        val status = if (items.isEmpty()) {
+            CheckInContextStatus.NONE
+        } else {
+            CheckInContextStatus.ENTRIES
+        }
+        dao.replaceUsageSelections(
             checkInId = checkInId,
             items = items,
             status = status,
