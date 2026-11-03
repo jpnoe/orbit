@@ -71,6 +71,7 @@ private enum class SleepTimeField {
 fun CheckInScreen(
     viewModel: CheckInViewModel,
     snackbarHostState: SnackbarHostState,
+    onOpenContext: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -93,6 +94,12 @@ fun CheckInScreen(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             viewModel.syncFromCommitted()
+        }
+    }
+
+    LaunchedEffect(viewModel) {
+        viewModel.openContext.collect { checkInId ->
+            onOpenContext(checkInId)
         }
     }
 

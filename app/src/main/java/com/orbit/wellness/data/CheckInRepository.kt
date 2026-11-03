@@ -9,6 +9,7 @@ import com.orbit.wellness.data.local.CheckInContextStatus
 import com.orbit.wellness.data.local.CheckInContextWindow
 import com.orbit.wellness.data.local.CheckInDao
 import com.orbit.wellness.data.local.CheckInRecord
+import com.orbit.wellness.data.local.MoodSample
 import com.orbit.wellness.util.DateUtils
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -20,6 +21,10 @@ fun interface CheckInWakeTimeSource {
 
 class CheckInRepository(
     private val dao: CheckInDao,
+    private val moodSamples: MoodSampleWriter = MoodSampleWriter {
+        error("Mood sample writer is not configured")
+    },
+    private val transaction: DatabaseTransaction = ImmediateDatabaseTransaction(),
     private val wakeTimes: CheckInWakeTimeSource = CheckInWakeTimeSource { null },
 ) {
     fun observeEnabledAxes(): Flow<List<CheckInAxis>> = dao.observeEnabledAxes()
@@ -57,6 +62,7 @@ class CheckInRepository(
         recordedAt: Long = System.currentTimeMillis(),
         localDate: String = DateUtils.formatLocalDate(DateUtils.localDateOf(recordedAt)),
         id: String = UUID.randomUUID().toString(),
+        legacyMood: LegacyCheckInMood? = null,
     ): CheckInRecord {
         CheckInValidator.validate(axisValues)
         val normalizedTrigger = trigger.trim()
@@ -98,13 +104,29 @@ class CheckInRepository(
             windowEndAt = boundary.windowEndAt,
             startBasis = boundary.startBasis,
         )
-        dao.insertCheckInWithContext(
-            record = record,
-            values = rows,
-            window = window,
-            categories = CheckInContextBoundary.unreviewedCategories(record.id),
-        )
+        val moodSample = legacyMood?.toSample(record.localDate)
+        transaction.run {
+            dao.insertCheckInWithContext(
+                record = record,
+                values = rows,
+                window = window,
+                categories = CheckInContextBoundary.unreviewedCategories(record.id),
+            )
+            if (moodSample != null) {
+                moodSamples.insert(moodSample)
+            }
+        }
         return record
+    }
+
+    /**
+     * Marks this context step finished. A second call keeps the original [completedAt].
+     * Category rows stay as they are. A missing window fails instead of reporting success.
+     */
+    suspend fun completeContext(checkInId: String, completedAt: Long = System.currentTimeMillis()): Long {
+        require(checkInId.isNotBlank()) { "Check-in id cannot be blank" }
+        return dao.completeContextIfUnset(checkInId, completedAt)
+            ?: error("Context window does not exist")
     }
 
     /**
@@ -146,6 +168,15 @@ class CheckInRepository(
         const val RECENT_LIMIT = 50
     }
 }
+
+private fun LegacyCheckInMood.toSample(localDate: String) = MoodSample(
+    localDate = localDate,
+    moodScore = score.coerceIn(0, 10),
+    note = note.trim(),
+    emotion = emotion.trim(),
+    recordedAt = recordedAt,
+    source = source,
+)
 
 private fun List<CheckInContextCategory>.inCategoryOrder(): List<CheckInContextCategory> {
     val byCategory = associateBy { it.category }

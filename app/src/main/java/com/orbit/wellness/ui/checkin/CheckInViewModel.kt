@@ -1,11 +1,15 @@
 package com.orbit.wellness.ui.checkin
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.orbit.wellness.data.CheckInDrafts
 import com.orbit.wellness.data.CheckInRepository
 import com.orbit.wellness.data.CurrentMoodStore
+import com.orbit.wellness.data.LegacyCheckInMood
+import com.orbit.wellness.data.MoodCacheUpdate
+import com.orbit.wellness.data.updateMoodCacheAfterSubmission
 import com.orbit.wellness.data.MoodRepository
 import com.orbit.wellness.data.SleepRepository
 import com.orbit.wellness.data.biometrics.BiometricRepository
@@ -20,6 +24,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -80,6 +85,9 @@ class CheckInViewModel(
 
     private val _savedFeedback = Channel<Unit>(Channel.BUFFERED)
     val savedFeedback = _savedFeedback.receiveAsFlow()
+
+    private val openContextEvents = CheckInOpenContextEvents()
+    val openContext = openContextEvents.checkInIds
 
     private val _sleepSavedFeedback = Channel<Unit>(Channel.BUFFERED)
     val sleepSavedFeedback = _sleepSavedFeedback.receiveAsFlow()
@@ -280,21 +288,31 @@ class CheckInViewModel(
             _uiState.update { it.copy(isSaving = true) }
             try {
                 val recordedAt = current.loggedAtMillis
-                checkInRepository.saveCheckIn(
-                    axisValues = inputs,
-                    trigger = CheckInRecord.TRIGGER_MANUAL,
-                    note = current.moodNote,
-                    recordedAt = recordedAt,
-                )
                 val mood = inputs.firstOrNull { it.axisId == DefaultCheckInAxes.MOOD }
-                if (mood != null) {
-                    moodRepository.logMood(
-                        moodScore = mood.value,
+                val legacyMood = mood?.let {
+                    LegacyCheckInMood(
+                        score = it.value,
                         note = current.moodNote,
                         emotion = current.selectedEmotion,
                         recordedAt = recordedAt,
                     )
-                    currentMoodStore.commit(mood.value.toFloat(), recordedAt)
+                }
+                val saved = checkInRepository.saveCheckIn(
+                    axisValues = inputs,
+                    trigger = CheckInRecord.TRIGGER_MANUAL,
+                    note = current.moodNote,
+                    recordedAt = recordedAt,
+                    legacyMood = legacyMood,
+                )
+                val cacheUpdate = updateMoodCacheAfterSubmission(legacyMood?.score) { score ->
+                    currentMoodStore.commit(score, recordedAt)
+                }
+                if (cacheUpdate is MoodCacheUpdate.Failed) {
+                    Log.w(
+                        "CheckInViewModel",
+                        "Mood cache update failed after check-in ${saved.id} was saved",
+                        cacheUpdate.error,
+                    )
                 }
                 _uiState.update {
                     it.copy(
@@ -307,7 +325,14 @@ class CheckInViewModel(
                     )
                 }
                 _savedFeedback.trySend(Unit)
-            } catch (error: IllegalArgumentException) {
+                checkInContextNavigationId(
+                    validationFailed = false,
+                    savedCheckInId = saved.id,
+                    persistenceFailed = false,
+                )?.let(openContextEvents::onSaved)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
                 _uiState.update { it.copy(isSaving = false) }
                 _messages.trySend(error.message ?: "Could not save check-in.")
             }

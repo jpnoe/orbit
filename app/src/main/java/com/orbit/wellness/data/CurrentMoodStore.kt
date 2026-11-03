@@ -31,8 +31,9 @@ class CurrentMoodStore(context: Context) {
     }
 
     /**
-     * Apply a DB mood sample if it is at least as new as the last commit
-     * (covers process death after check-in / activity logs).
+     * Apply a DB mood sample if it is at least as new as the last commit.
+     * This repairs the cache after process death, including when a check-in
+     * was saved and this preference write did not finish.
      */
     fun hydrateFromSample(moodScore: Int, recordedAt: Long) {
         if (recordedAt >= committedAt) {

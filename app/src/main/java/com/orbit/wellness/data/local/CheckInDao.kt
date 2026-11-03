@@ -100,6 +100,27 @@ interface CheckInDao {
 
     @Query(
         """
+        UPDATE check_in_context_windows
+        SET completedAt = :completedAt
+        WHERE checkInId = :checkInId AND completedAt IS NULL
+        """,
+    )
+    suspend fun setCompletedAtIfNull(checkInId: String, completedAt: Long): Int
+
+    /**
+     * Sets completion only while it is still null.
+     * Returns null when the window does not exist, otherwise the stored completion time.
+     */
+    @Transaction
+    suspend fun completeContextIfUnset(checkInId: String, completedAt: Long): Long? {
+        val existing = getContextWindow(checkInId) ?: return null
+        if (existing.completedAt != null) return existing.completedAt
+        setCompletedAtIfNull(checkInId, completedAt)
+        return getContextWindow(checkInId)?.completedAt
+    }
+
+    @Query(
+        """
         SELECT * FROM check_in_context_categories
         WHERE checkInId = :checkInId
         """,

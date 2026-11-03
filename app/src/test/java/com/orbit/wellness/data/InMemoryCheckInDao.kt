@@ -87,6 +87,33 @@ class InMemoryCheckInDao : CheckInDao {
         activityItems.value = activityItems.value + items
     }
 
+    override suspend fun setCompletedAtIfNull(checkInId: String, completedAt: Long): Int {
+        val current = windows.value[checkInId] ?: return 0
+        if (current.completedAt != null) return 0
+        windows.value = windows.value + (checkInId to current.copy(completedAt = completedAt))
+        return 1
+    }
+
+    fun snapshot(): CheckInDaoSnapshot = CheckInDaoSnapshot(
+        checkIns = checkIns.toMap(),
+        values = values.toList(),
+        windows = windows.value,
+        categories = categories.value,
+        activityItems = activityItems.value,
+        inserted = inserted,
+    )
+
+    fun restore(snapshot: CheckInDaoSnapshot) {
+        checkIns.clear()
+        checkIns.putAll(snapshot.checkIns)
+        values.clear()
+        values += snapshot.values
+        windows.value = snapshot.windows
+        categories.value = snapshot.categories
+        activityItems.value = snapshot.activityItems
+        inserted = snapshot.inserted
+    }
+
     override suspend fun updateCategoryStatus(
         checkInId: String,
         category: String,
@@ -102,3 +129,12 @@ class InMemoryCheckInDao : CheckInDao {
         }
     }
 }
+
+data class CheckInDaoSnapshot(
+    val checkIns: Map<String, CheckInRecord>,
+    val values: List<CheckInAxisValue>,
+    val windows: Map<String, CheckInContextWindow>,
+    val categories: List<CheckInContextCategory>,
+    val activityItems: List<CheckInActivityItem>,
+    val inserted: CheckInRecord?,
+)
