@@ -231,6 +231,10 @@ data class CoreAxisDeltaViewV2(
 /**
  * A resolved previous check-in. [deltas] is empty when the link is real but no
  * axis was recorded at both ends. That link is not a measured change.
+ *
+ * [previous] is the starting state, [interval] is the context saved with the
+ * ending check-in, and [ending] is the next state. The interval is not part of
+ * either state. See [asDirectedStep].
  */
 data class StateTransitionObservationV2(
     val previous: StateObservationV2,
@@ -248,6 +252,53 @@ data class StateTransitionObservationV2(
 
     val hasMeasuredDelta: Boolean
         get() = deltas.isNotEmpty()
+}
+
+/**
+ * One directed step already stored on [StateTransitionObservationV2].
+ *
+ * `State_t --[context during the interval]--> State_t+1`
+ *
+ * [interval] is the context window saved with [endingState]'s check-in. It
+ * describes what was reported between [startingState] and [endingState]. It is
+ * not copied into either state. The next check-in's window, once that check-in
+ * exists, is the outgoing interval of [endingState] and is a different row.
+ * These fields are the same objects already on the dataset's transition.
+ */
+data class DirectedCheckInStep(
+    val startingState: StateObservationV2,
+    val interval: ContextIntervalObservationV2,
+    val endingState: StateObservationV2,
+)
+
+fun StateTransitionObservationV2.asDirectedStep(): DirectedCheckInStep {
+    return DirectedCheckInStep(
+        startingState = previous,
+        interval = interval,
+        endingState = ending,
+    )
+}
+
+/** Linked transitions in dataset order. This does not copy state or interval rows. */
+fun CheckInAnalysisDatasetV2.directedSteps(): List<DirectedCheckInStep> {
+    return transitions.map { it.asDirectedStep() }
+}
+
+/**
+ * The context window saved with [checkInId]. That window led into this state.
+ * It is absent when the check-in has no projected interval.
+ */
+fun CheckInAnalysisDatasetV2.intervalRecordedWith(checkInId: String): ContextIntervalObservationV2? {
+    return intervals.firstOrNull { it.endingCheckInId == checkInId }
+}
+
+/**
+ * The context window whose previous check-in is [checkInId]. That window is
+ * saved on the next check-in, not on this state. It exists only after the next
+ * check-in has been recorded.
+ */
+fun CheckInAnalysisDatasetV2.outgoingInterval(checkInId: String): ContextIntervalObservationV2? {
+    return intervals.firstOrNull { it.previousCheckInId == checkInId }
 }
 
 enum class AnalysisIssueCode {

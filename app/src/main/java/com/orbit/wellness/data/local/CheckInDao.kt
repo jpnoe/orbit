@@ -29,6 +29,14 @@ interface CheckInDao {
 
     @Query(
         """
+        SELECT * FROM check_ins
+        ORDER BY recordedAt ASC, id ASC
+        """,
+    )
+    fun observeAll(): Flow<List<CheckInRecord>>
+
+    @Query(
+        """
         SELECT * FROM check_in_axis_values
         WHERE checkInId = :checkInId
         ORDER BY axisId ASC

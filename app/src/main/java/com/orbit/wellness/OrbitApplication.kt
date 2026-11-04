@@ -2,6 +2,7 @@ package com.orbit.wellness
 
 import android.app.Application
 import com.orbit.wellness.data.ActivityRepository
+import com.orbit.wellness.data.CheckInAnalysisRepository
 import com.orbit.wellness.data.CheckInRepository
 import com.orbit.wellness.data.CurrentMoodStore
 import com.orbit.wellness.data.DietRepository
@@ -43,6 +44,8 @@ class OrbitApplication : Application() {
     lateinit var moodRepository: MoodRepository
         private set
     lateinit var checkInRepository: CheckInRepository
+        private set
+    lateinit var checkInAnalysisRepository: CheckInAnalysisRepository
         private set
     lateinit var journalRepository: JournalRepository
         private set
@@ -86,6 +89,7 @@ class OrbitApplication : Application() {
             dao = database.moodSampleDao(),
             emotionDao = database.emotionOptionDao(),
         )
+        checkInAnalysisRepository = CheckInAnalysisRepository(database.checkInDao())
         checkInRepository = CheckInRepository(
             dao = database.checkInDao(),
             moodSamples = MoodSampleWriter { sample -> database.moodSampleDao().insert(sample) },

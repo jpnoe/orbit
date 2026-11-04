@@ -107,5 +107,6 @@ fun DailyGuideBanner(
 private fun stepLabelRes(destination: OrbitDestination): Int = when (destination) {
     OrbitDestination.CheckIn -> R.string.tab_check_in
     OrbitDestination.History -> R.string.tab_history
+    OrbitDestination.Insights -> R.string.tab_insights
     OrbitDestination.Profile -> R.string.tab_profile
 }

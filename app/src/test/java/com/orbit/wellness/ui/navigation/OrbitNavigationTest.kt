@@ -13,14 +13,14 @@ import java.io.File
 
 class OrbitNavigationTest {
     @Test
-    fun topLevelDestinationsAreLogHistoryAndProfile() {
+    fun topLevelDestinationsAreLogHistoryInsightsAndProfile() {
         assertEquals(
-            listOf("check_in", "history", "profile"),
+            listOf("check_in", "history", "insights", "profile"),
             OrbitNavigation.topLevel.map { it.route },
         )
         assertEquals(
-            listOf("Log", "History", "Profile"),
-            listOf("tab_check_in", "tab_history", "tab_profile").map { stringValue(it) },
+            listOf("Log", "History", "Insights", "Profile"),
+            listOf("tab_check_in", "tab_history", "tab_insights", "tab_profile").map { stringValue(it) },
         )
         assertEquals("Log", stringValue("check_in_title"))
         assertTrue(OrbitNavigation.topLevel.none { it.route in OrbitNavigation.retiredTopLevelRoutes })
@@ -53,6 +53,7 @@ class OrbitNavigationTest {
         }
         assertFalse(OrbitNavigation.hidesBottomBar(OrbitDestination.CheckIn.route))
         assertFalse(OrbitNavigation.hidesBottomBar(OrbitDestination.History.route))
+        assertFalse(OrbitNavigation.hidesBottomBar(OrbitDestination.Insights.route))
         assertFalse(OrbitNavigation.hidesBottomBar(OrbitDestination.Profile.route))
     }
 
@@ -93,7 +94,8 @@ class OrbitNavigationTest {
         assertEquals(OrbitNavigation.topLevel, DailyGuide.steps)
         assertTrue(DailyGuide.steps.none { it.route in OrbitNavigation.retiredTopLevelRoutes })
         assertEquals(OrbitDestination.CheckIn, DailyGuide.steps.first())
-        assertEquals(OrbitDestination.Profile, DailyGuide.nextAfter(OrbitDestination.History.route))
+        assertEquals(OrbitDestination.Insights, DailyGuide.nextAfter(OrbitDestination.History.route))
+        assertEquals(OrbitDestination.Profile, DailyGuide.nextAfter(OrbitDestination.Insights.route))
         assertTrue(DailyGuide.isLast(OrbitDestination.Profile.route))
     }
 

@@ -21,7 +21,9 @@ class InMemoryCheckInDao : CheckInDao {
         private set
 
     private val checkIns = linkedMapOf<String, CheckInRecord>()
+    private val checkInRows = MutableStateFlow<List<CheckInRecord>>(emptyList())
     private val values = mutableListOf<CheckInAxisValue>()
+    private val axisRows = MutableStateFlow<List<CheckInAxisValue>>(emptyList())
     private val windows = MutableStateFlow<Map<String, CheckInContextWindow>>(emptyMap())
     private val categories = MutableStateFlow<List<CheckInContextCategory>>(emptyList())
     private val activityItems = MutableStateFlow<List<CheckInActivityItem>>(emptyList())
@@ -35,10 +37,12 @@ class InMemoryCheckInDao : CheckInDao {
     override fun observeRecent(limit: Int): Flow<List<CheckInRecord>> =
         MutableStateFlow(checkIns.values.sortedByDescending { it.recordedAt }.take(limit))
 
+    override fun observeAll(): Flow<List<CheckInRecord>> = checkInRows
+
     override suspend fun getValuesForCheckIn(checkInId: String): List<CheckInAxisValue> =
         values.filter { it.checkInId == checkInId }
 
-    override fun observeAxisValues(): Flow<List<CheckInAxisValue>> = MutableStateFlow(values.toList())
+    override fun observeAxisValues(): Flow<List<CheckInAxisValue>> = axisRows
 
     override suspend fun getLatest(): CheckInRecord? =
         checkIns.values.maxByOrNull { it.recordedAt }
@@ -53,11 +57,14 @@ class InMemoryCheckInDao : CheckInDao {
     override suspend fun insertCheckIn(record: CheckInRecord) {
         checkIns[record.id] = record
         inserted = record
+        publishCheckIns()
     }
 
     override suspend fun deleteCheckIn(checkInId: String) {
         checkIns.remove(checkInId)
         values.removeAll { it.checkInId == checkInId }
+        publishCheckIns()
+        publishAxes()
         windows.value = windows.value - checkInId
         categories.value = categories.value.filterNot { it.checkInId == checkInId }
         activityItems.value = activityItems.value.filterNot { it.checkInId == checkInId }
@@ -69,6 +76,7 @@ class InMemoryCheckInDao : CheckInDao {
 
     override suspend fun insertAxisValues(values: List<CheckInAxisValue>) {
         this.values += values
+        publishAxes()
     }
 
     override suspend fun insertContextWindow(window: CheckInContextWindow) {
@@ -143,6 +151,16 @@ class InMemoryCheckInDao : CheckInDao {
         meals.value = snapshot.meals
         mealFoods.value = snapshot.mealFoods
         inserted = snapshot.inserted
+        publishCheckIns()
+        publishAxes()
+    }
+
+    private fun publishCheckIns() {
+        checkInRows.value = checkIns.values.sortedWith(compareBy({ it.recordedAt }, { it.id }))
+    }
+
+    private fun publishAxes() {
+        axisRows.value = values.toList()
     }
 
     override suspend fun updateCategoryStatus(

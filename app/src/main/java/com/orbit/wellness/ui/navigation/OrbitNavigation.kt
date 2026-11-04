@@ -5,6 +5,7 @@ enum class OrbitDestination(
 ) {
     CheckIn("check_in"),
     History("history"),
+    Insights("insights"),
     Profile("profile"),
 }
 
@@ -17,6 +18,7 @@ object OrbitNavigation {
     val topLevel: List<OrbitDestination> = listOf(
         OrbitDestination.CheckIn,
         OrbitDestination.History,
+        OrbitDestination.Insights,
         OrbitDestination.Profile,
     )
 

@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.ui.unit.dp
@@ -66,6 +67,8 @@ import com.orbit.wellness.ui.util.CollectSnackbarMessages
 import com.orbit.wellness.ui.util.showBriefMessage
 import com.orbit.wellness.ui.history.HistoryScreen
 import com.orbit.wellness.ui.history.HistoryViewModel
+import com.orbit.wellness.ui.insights.InsightsScreen
+import com.orbit.wellness.ui.insights.InsightsViewModel
 import com.orbit.wellness.ui.profile.HealthConnectViewModel
 import com.orbit.wellness.ui.profile.ProfileScreen
 import com.orbit.wellness.ui.profile.TrustedContactsSection
@@ -180,6 +183,8 @@ fun OrbitApp(
                                     Icon(Icons.Default.Today, contentDescription = null)
                                 OrbitDestination.History ->
                                     Icon(Icons.Default.History, contentDescription = null)
+                                OrbitDestination.Insights ->
+                                    Icon(Icons.Default.Insights, contentDescription = null)
                                 OrbitDestination.Profile ->
                                     Icon(Icons.Default.Person, contentDescription = null)
                             }
@@ -189,6 +194,7 @@ fun OrbitApp(
                                 text = when (destination) {
                                     OrbitDestination.CheckIn -> stringResource(R.string.tab_check_in)
                                     OrbitDestination.History -> stringResource(R.string.tab_history)
+                                    OrbitDestination.Insights -> stringResource(R.string.tab_insights)
                                     OrbitDestination.Profile -> stringResource(R.string.tab_profile)
                                 },
                             )
@@ -378,6 +384,15 @@ fun OrbitApp(
                     historyViewModel = historyViewModel,
                     trendsViewModel = trendsViewModel,
                     snackbarHostState = snackbarHostState,
+                )
+            }
+            composable(OrbitDestination.Insights.route) {
+                val insightsViewModel: InsightsViewModel = viewModel(
+                    factory = InsightsViewModel.Factory(application.checkInAnalysisRepository),
+                )
+                InsightsScreen(
+                    viewModel = insightsViewModel,
+                    onOpenLog = { navigateToTab(OrbitDestination.CheckIn.route) },
                 )
             }
             composable(OrbitDestination.Profile.route) {
