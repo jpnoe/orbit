@@ -47,6 +47,15 @@ interface MoodSampleDao {
     @Query(
         """
         SELECT * FROM mood_samples
+        WHERE source = :source
+        ORDER BY recordedAt DESC
+        """,
+    )
+    fun observeBySource(source: String): Flow<List<MoodSample>>
+
+    @Query(
+        """
+        SELECT * FROM mood_samples
         ORDER BY recordedAt DESC
         LIMIT 1
         """,

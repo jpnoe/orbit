@@ -1,14 +1,20 @@
 package com.orbit.wellness.ui.history
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -42,7 +48,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.orbit.wellness.R
 import com.orbit.wellness.data.HistoryItem
+import com.orbit.wellness.data.local.DefaultCheckInAxes
+import com.orbit.wellness.ui.checkin.checkInAxisLine
+import com.orbit.wellness.ui.checkin.checkInEmotionLine
+import com.orbit.wellness.ui.checkin.checkInMoodLine
 import com.orbit.wellness.data.local.ActivityEvent
+import com.orbit.wellness.data.local.CheckInContextStartBasis
 import com.orbit.wellness.data.local.MealEvent
 import com.orbit.wellness.data.local.MoodSample
 import com.orbit.wellness.data.local.SleepEvent
@@ -57,7 +68,7 @@ import com.orbit.wellness.util.DateUtils
 import com.orbit.wellness.util.VolumeUnits
 import kotlin.math.roundToInt
 
-private enum class HistoryTab {
+internal enum class HistoryTab {
     LOG,
     TRENDS,
 }
@@ -133,14 +144,6 @@ fun HistoryScreen(
                     ),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    item {
-                        Text(
-                            text = stringResource(R.string.history_subtitle),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-
                     when {
                         feed.isLoading -> {
                             item { InlineLoading() }
@@ -155,10 +158,11 @@ fun HistoryScreen(
                         }
                         else -> {
                             items(feed.items, key = { it.id }) { item ->
+                                val editable = item !is HistoryItem.CheckInInterval
                                 HistoryItemCard(
                                     item = item,
-                                    onClick = { historyViewModel.onSelectEdit(item) },
-                                    onLongClick = { historyViewModel.onLongPressItem(item) },
+                                    onClick = { if (editable) historyViewModel.onSelectEdit(item) },
+                                    onLongClick = { if (editable) historyViewModel.onLongPressItem(item) },
                                 )
                             }
                         }
@@ -244,6 +248,7 @@ fun HistoryScreen(
     // Edit dialogs
     uiState.itemToEdit?.let { item ->
         when (item) {
+            is HistoryItem.CheckInInterval -> Unit
             is HistoryItem.Mood -> {
                 EditMoodDialog(
                     sample = item.sample,
@@ -303,19 +308,29 @@ private fun HistoryItemCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
+    val editable = item !is HistoryItem.CheckInInterval
     val timeLabel = when (item) {
+        is HistoryItem.CheckInInterval -> intervalRangeLabel(item)
+        is HistoryItem.Sleep ->
+            DateUtils.timeRangeLabel(item.event.bedtime, item.event.wakeTime)
         is HistoryItem.Activity ->
-            DateUtils.sessionTimeLabel(item.event.startTime, item.event.endTime)
+            DateUtils.entryTimeLabel(item.event.startTime, item.event.endTime)
         is HistoryItem.Workout ->
-            DateUtils.sessionTimeLabel(item.event.startTime, item.event.endTime)
-        else -> DateUtils.shortDateTimeLabel(item.timestamp)
+            DateUtils.entryTimeLabel(item.event.startTime, item.event.endTime)
+        else -> DateUtils.datedTimeLabel(item.timestamp)
     }
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick,
+            .then(
+                if (editable) {
+                    Modifier.combinedClickable(
+                        onClick = onClick,
+                        onLongClick = onLongClick,
+                    )
+                } else {
+                    Modifier
+                },
             ),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface,
@@ -331,6 +346,7 @@ private fun HistoryItemCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             when (item) {
+                is HistoryItem.CheckInInterval -> CheckInIntervalBody(item)
                 is HistoryItem.Mood -> {
                     val moodTitle = if (item.sample.emotion.isNotBlank()) {
                         "${stringResource(R.string.history_mood, item.sample.moodScore)} · ${item.sample.emotion}"
@@ -471,14 +487,6 @@ private fun HistoryItemCard(
                     )
                     Text(
                         text = stringResource(
-                            R.string.history_sleep_range,
-                            DateUtils.shortDateTimeLabel(item.event.bedtime),
-                            DateUtils.shortDateTimeLabel(item.event.wakeTime),
-                        ),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Text(
-                        text = stringResource(
                             R.string.history_sleep_quality,
                             item.event.sleepQuality,
                         ),
@@ -487,6 +495,101 @@ private fun HistoryItemCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun intervalRangeLabel(item: HistoryItem.CheckInInterval): String {
+    val start = item.windowStartAt
+    return if (item.startBasis == CheckInContextStartBasis.DAY_START || start == null) {
+        DateUtils.wakeupRangeLabel(
+            startMillis = start,
+            endMillis = item.recordedAt,
+            wakeupLabel = stringResource(R.string.history_interval_wakeup),
+        )
+    } else {
+        DateUtils.timeRangeLabel(start, item.recordedAt)
+    }
+}
+
+@Composable
+private fun CheckInIntervalBody(item: HistoryItem.CheckInInterval) {
+    val missing = stringResource(R.string.check_in_not_set)
+    val detail = MaterialTheme.typography.bodyMedium
+    Text(
+        text = stringResource(R.string.history_log_title),
+        style = MaterialTheme.typography.titleMedium,
+    )
+    Text(
+        text = checkInEmotionLine(item.emotion, missing),
+        style = detail,
+    )
+    Text(
+        text = checkInMoodLine(item.moodScore, missing),
+        style = detail,
+    )
+    Text(
+        text = checkInAxisLine(DefaultCheckInAxes.ENERGY, item.energyScore, missing),
+        style = detail,
+    )
+    Text(
+        text = checkInAxisLine(DefaultCheckInAxes.CONFIDENCE, item.confidenceScore, missing),
+        style = detail,
+    )
+    Text(
+        text = checkInAxisLine(DefaultCheckInAxes.ANXIETY, item.anxietyScore, missing),
+        style = detail,
+    )
+    if (item.note.isNotBlank()) {
+        Text(text = item.note, style = MaterialTheme.typography.bodyMedium)
+    }
+    val sections = listOf(
+        R.string.tab_activity to item.activities,
+        R.string.tab_exercise to item.workouts,
+        R.string.tab_diet to item.meals,
+        R.string.tab_use to item.usage,
+    ).filter { (_, lines) -> lines.isNotEmpty() }
+    if (sections.isNotEmpty()) {
+        Row(
+            modifier = Modifier
+                .padding(start = 16.dp, top = 8.dp)
+                .height(IntrinsicSize.Min),
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(2.dp)
+                    .fillMaxHeight()
+                    .background(MaterialTheme.colorScheme.primary),
+            )
+            Column(modifier = Modifier.padding(start = 10.dp)) {
+                sections.forEachIndexed { index, (titleRes, lines) ->
+                    IntervalCategory(
+                        title = stringResource(titleRes),
+                        lines = lines,
+                        spacedFromPrevious = index > 0,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun IntervalCategory(
+    title: String,
+    lines: List<String>,
+    spacedFromPrevious: Boolean,
+) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleSmall,
+        modifier = if (spacedFromPrevious) Modifier.padding(top = 8.dp) else Modifier,
+    )
+    lines.forEach { line ->
+        Text(
+            text = line,
+            style = MaterialTheme.typography.bodyMedium,
+        )
     }
 }
 

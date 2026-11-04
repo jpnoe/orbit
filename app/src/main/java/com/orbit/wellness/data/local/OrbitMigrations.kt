@@ -265,6 +265,216 @@ object OrbitMigrations {
         }
     }
 
+    val MIGRATION_16_17 = object : Migration(16, 17) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_in_axes (
+                    id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    lowLabel TEXT NOT NULL,
+                    highLabel TEXT NOT NULL,
+                    sortOrder INTEGER NOT NULL,
+                    isDefault INTEGER NOT NULL,
+                    isEnabled INTEGER NOT NULL,
+                    createdAt INTEGER NOT NULL,
+                    PRIMARY KEY(id)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_axes_sortOrder ON check_in_axes(sortOrder)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_axes_isEnabled_sortOrder ON check_in_axes(isEnabled, sortOrder)",
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_ins (
+                    id TEXT NOT NULL,
+                    localDate TEXT NOT NULL,
+                    recordedAt INTEGER NOT NULL,
+                    trigger TEXT NOT NULL,
+                    note TEXT NOT NULL,
+                    PRIMARY KEY(id)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_ins_localDate ON check_ins(localDate)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_ins_recordedAt ON check_ins(recordedAt)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_ins_trigger ON check_ins(trigger)",
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_in_axis_values (
+                    checkInId TEXT NOT NULL,
+                    axisId TEXT NOT NULL,
+                    value INTEGER NOT NULL,
+                    PRIMARY KEY(checkInId, axisId),
+                    FOREIGN KEY(checkInId) REFERENCES check_ins(id) ON UPDATE NO ACTION ON DELETE CASCADE,
+                    FOREIGN KEY(axisId) REFERENCES check_in_axes(id) ON UPDATE NO ACTION ON DELETE NO ACTION
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_axis_values_checkInId ON check_in_axis_values(checkInId)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_axis_values_axisId ON check_in_axis_values(axisId)",
+            )
+            db.execSQL(DefaultCheckInAxes.insertOrIgnoreSql())
+        }
+    }
+
+    val MIGRATION_17_18 = object : Migration(17, 18) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_in_context_windows (
+                    checkInId TEXT NOT NULL,
+                    previousCheckInId TEXT,
+                    windowStartAt INTEGER NOT NULL,
+                    windowEndAt INTEGER NOT NULL,
+                    startBasis TEXT NOT NULL,
+                    completedAt INTEGER,
+                    PRIMARY KEY(checkInId),
+                    FOREIGN KEY(checkInId) REFERENCES check_ins(id) ON UPDATE NO ACTION ON DELETE CASCADE,
+                    FOREIGN KEY(previousCheckInId) REFERENCES check_ins(id) ON UPDATE NO ACTION ON DELETE SET NULL
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_context_windows_previousCheckInId ON check_in_context_windows(previousCheckInId)",
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_in_context_categories (
+                    checkInId TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    reviewedAt INTEGER,
+                    PRIMARY KEY(checkInId, category),
+                    FOREIGN KEY(checkInId) REFERENCES check_in_context_windows(checkInId) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_context_categories_checkInId ON check_in_context_categories(checkInId)",
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_in_activity_items (
+                    id TEXT NOT NULL,
+                    checkInId TEXT NOT NULL,
+                    activityOptionId TEXT,
+                    activityName TEXT NOT NULL,
+                    reportedAt INTEGER NOT NULL,
+                    PRIMARY KEY(id),
+                    FOREIGN KEY(checkInId) REFERENCES check_in_context_windows(checkInId) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_activity_items_checkInId ON check_in_activity_items(checkInId)",
+            )
+        }
+    }
+
+    val MIGRATION_18_19 = object : Migration(18, 19) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_in_workout_items (
+                    id TEXT NOT NULL,
+                    checkInId TEXT NOT NULL,
+                    workoutOptionId TEXT,
+                    workoutName TEXT NOT NULL,
+                    durationMinutes INTEGER NOT NULL,
+                    reportedAt INTEGER NOT NULL,
+                    PRIMARY KEY(id),
+                    FOREIGN KEY(checkInId) REFERENCES check_in_context_windows(checkInId) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_workout_items_checkInId ON check_in_workout_items(checkInId)",
+            )
+        }
+    }
+
+    val MIGRATION_19_20 = object : Migration(19, 20) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_in_usage_items (
+                    id TEXT NOT NULL,
+                    checkInId TEXT NOT NULL,
+                    substanceOptionId TEXT,
+                    name TEXT NOT NULL,
+                    intent TEXT NOT NULL,
+                    amount TEXT NOT NULL,
+                    reportedAt INTEGER NOT NULL,
+                    PRIMARY KEY(id),
+                    FOREIGN KEY(checkInId) REFERENCES check_in_context_windows(checkInId) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_usage_items_checkInId ON check_in_usage_items(checkInId)",
+            )
+        }
+    }
+
+    val MIGRATION_20_21 = object : Migration(20, 21) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_in_meals (
+                    id TEXT NOT NULL,
+                    checkInId TEXT NOT NULL,
+                    size TEXT NOT NULL,
+                    sortOrder INTEGER NOT NULL,
+                    reportedAt INTEGER NOT NULL,
+                    PRIMARY KEY(id),
+                    FOREIGN KEY(checkInId) REFERENCES check_in_context_windows(checkInId) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_meals_checkInId ON check_in_meals(checkInId)",
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS check_in_meal_food_items (
+                    id TEXT NOT NULL,
+                    mealId TEXT NOT NULL,
+                    foodOptionId TEXT,
+                    foodName TEXT NOT NULL,
+                    sortOrder INTEGER NOT NULL,
+                    PRIMARY KEY(id),
+                    FOREIGN KEY(mealId) REFERENCES check_in_meals(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_check_in_meal_food_items_mealId ON check_in_meal_food_items(mealId)",
+            )
+        }
+    }
+
+    val MIGRATION_21_22 = object : Migration(21, 22) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "ALTER TABLE check_ins ADD COLUMN emotion TEXT NOT NULL DEFAULT ''",
+            )
+        }
+    }
+
     val ALL = arrayOf(
         MIGRATION_10_11,
         MIGRATION_11_12,
@@ -272,5 +482,11 @@ object OrbitMigrations {
         MIGRATION_13_14,
         MIGRATION_14_15,
         MIGRATION_15_16,
+        MIGRATION_16_17,
+        MIGRATION_17_18,
+        MIGRATION_18_19,
+        MIGRATION_19_20,
+        MIGRATION_20_21,
+        MIGRATION_21_22,
     )
 }

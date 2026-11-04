@@ -1,35 +1,55 @@
 package com.orbit.wellness.ui.checkin
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.orbit.wellness.data.CheckInDrafts
+import com.orbit.wellness.data.CheckInRepository
 import com.orbit.wellness.data.CurrentMoodStore
+import com.orbit.wellness.data.LegacyCheckInMood
+import com.orbit.wellness.data.MoodCacheUpdate
+import com.orbit.wellness.data.updateMoodCacheAfterSubmission
 import com.orbit.wellness.data.MoodRepository
 import com.orbit.wellness.data.SleepRepository
 import com.orbit.wellness.data.biometrics.BiometricRepository
-import com.orbit.wellness.data.local.EmotionOption
+import com.orbit.wellness.data.local.CheckInAxis
+import com.orbit.wellness.data.local.CheckInContextWindow
+import com.orbit.wellness.data.local.CheckInRecord
+import com.orbit.wellness.data.local.DefaultCheckInAxes
 import com.orbit.wellness.data.local.MoodSample
+import kotlinx.coroutines.flow.combine
+import com.orbit.wellness.ui.context.PendingCheckInSession
+import com.orbit.wellness.data.local.EmotionOption
 import com.orbit.wellness.util.DateUtils
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import kotlin.math.round
 
 data class CheckInUiState(
-    val moodScore: Float = 5f,
+    val enabledAxes: List<CheckInAxis> = emptyList(),
+    val axesLoaded: Boolean = false,
+    /**
+     * Explicit axis values keyed by stable axis id.
+     * Absent and null both mean the axis was not set.
+     */
+    val axisDrafts: Map<String, Int?> = emptyMap(),
+    /** Visual slider anchor for mood. This is not an observation. */
+    val moodAnchor: Float = 5f,
     val moodNote: String = "",
     val emotionOptions: List<EmotionOption> = emptyList(),
     val selectedEmotion: String = "",
     val showAddEmotionDialog: Boolean = false,
     val newEmotionName: String = "",
     val isSaving: Boolean = false,
-    val todaySampleCount: Int = 0,
-    val todaySamples: List<MoodSample> = emptyList(),
+    val isDiscarding: Boolean = false,
     val loggedAtMillis: Long = System.currentTimeMillis(),
     val hasLoggedSleepToday: Boolean = false,
     val sleepLoaded: Boolean = false,
@@ -39,6 +59,16 @@ data class CheckInUiState(
     val isSavingSleep: Boolean = false,
     /** True when bedtime/wake were seeded from Health Connect and not yet saved. */
     val sleepPrefillFromHealthConnect: Boolean = false,
+    val latestMood: Int? = null,
+    val latestEmotion: String = "",
+    val latestEnergy: Int? = null,
+    val latestConfidence: Int? = null,
+    val latestAnxiety: Int? = null,
+    val latestRecordedAt: Long? = null,
+    val latestWindowStartAt: Long? = null,
+    val latestStartBasis: String? = null,
+    val hasLatestCheckIn: Boolean = false,
+    val latestLoaded: Boolean = false,
 )
 
 private fun defaultBedtimeMillis(): Long {
@@ -51,13 +81,14 @@ private fun defaultWakeTimeMillis(): Long {
 
 class CheckInViewModel(
     private val moodRepository: MoodRepository,
+    private val checkInRepository: CheckInRepository,
     private val sleepRepository: SleepRepository,
     private val currentMoodStore: CurrentMoodStore,
     private val biometricRepository: BiometricRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
-        CheckInUiState(moodScore = currentMoodStore.committedMood.value),
+        CheckInUiState(moodAnchor = currentMoodStore.committedMood.value),
     )
     val uiState: StateFlow<CheckInUiState> = _uiState.asStateFlow()
 
@@ -67,25 +98,79 @@ class CheckInViewModel(
     private val _savedFeedback = Channel<Unit>(Channel.BUFFERED)
     val savedFeedback = _savedFeedback.receiveAsFlow()
 
+    private val openContextEvents = CheckInOpenContextEvents()
+    val openContext = openContextEvents.checkInIds
+
     private val _sleepSavedFeedback = Channel<Unit>(Channel.BUFFERED)
     val sleepSavedFeedback = _sleepSavedFeedback.receiveAsFlow()
 
     private var appliedSleepPrefill = false
     private var sleepTimesTouchedByUser = false
+    private var savedCheckInId: String? = null
+    private var savedMoodSampleId: String? = null
+    private var pending: PendingCheckInSession? = null
+
+    fun pendingSession(): PendingCheckInSession? = pending
 
     init {
+        viewModelScope.launch {
+            checkInRepository.observeEnabledAxes().collect { axes ->
+                _uiState.update { state ->
+                    state.copy(
+                        enabledAxes = axes,
+                        axesLoaded = true,
+                    )
+                }
+            }
+        }
         viewModelScope.launch {
             moodRepository.observeEmotionOptions().collect { options ->
                 _uiState.update { it.copy(emotionOptions = options) }
             }
         }
         viewModelScope.launch {
-            moodRepository.observeTodaySamples().collect { samples ->
-                val checkIns = samples.filter { it.source == MoodSample.SOURCE_CHECK_IN }
+            combine(
+                checkInRepository.observeRecentCheckIns(1),
+                checkInRepository.observeAxisValues(),
+                moodRepository.observeBySource(MoodSample.SOURCE_CHECK_IN),
+                checkInRepository.observeContextWindows(),
+            ) { checkIns, axisValues, moods, windows ->
+                val latest = checkIns.firstOrNull()
+                if (latest == null) {
+                    CheckInUiState()
+                } else {
+                    val scores = axisValues
+                        .filter { it.checkInId == latest.id }
+                        .associate { it.axisId to it.value }
+                    val mood = moods.firstOrNull {
+                        it.recordedAt == latest.recordedAt && it.localDate == latest.localDate
+                    }
+                    val window = windows.firstOrNull { it.checkInId == latest.id }
+                    CheckInUiState(
+                        latestMood = scores[DefaultCheckInAxes.MOOD] ?: mood?.moodScore,
+                        latestEmotion = latest.emotion.ifBlank { mood?.emotion.orEmpty() },
+                        latestEnergy = scores[DefaultCheckInAxes.ENERGY],
+                        latestConfidence = scores[DefaultCheckInAxes.CONFIDENCE],
+                        latestAnxiety = scores[DefaultCheckInAxes.ANXIETY],
+                        latestRecordedAt = latest.recordedAt,
+                        latestWindowStartAt = window?.windowStartAt,
+                        latestStartBasis = window?.startBasis,
+                        hasLatestCheckIn = true,
+                    )
+                }
+            }.collect { latest ->
                 _uiState.update {
                     it.copy(
-                        todaySampleCount = checkIns.size,
-                        todaySamples = checkIns,
+                        latestMood = latest.latestMood,
+                        latestEmotion = latest.latestEmotion,
+                        latestEnergy = latest.latestEnergy,
+                        latestConfidence = latest.latestConfidence,
+                        latestAnxiety = latest.latestAnxiety,
+                        latestRecordedAt = latest.latestRecordedAt,
+                        latestWindowStartAt = latest.latestWindowStartAt,
+                        latestStartBasis = latest.latestStartBasis,
+                        hasLatestCheckIn = latest.hasLatestCheckIn,
+                        latestLoaded = true,
                     )
                 }
             }
@@ -132,13 +217,55 @@ class CheckInViewModel(
         }
     }
 
-    /** Snap slider to last logged mood (call on tab enter / leave without save). */
-    fun syncFromCommitted() {
-        _uiState.update { it.copy(moodScore = currentMoodStore.committedMood.value) }
+    /**
+     * Drops the in-progress entry. A check-in already written for it is deleted,
+     * and the sliders, note, emotion, and logged time are cleared.
+     */
+    fun discardEntry(onFinished: () -> Unit) {
+        if (_uiState.value.isDiscarding) return
+        _uiState.update { it.copy(isDiscarding = true) }
+        viewModelScope.launch {
+            try {
+                val checkInId = savedCheckInId
+                val moodSampleId = savedMoodSampleId
+                if (checkInId != null) {
+                    checkInRepository.discardCheckIn(checkInId, moodSampleId)
+                    val latest = moodRepository.getLatestSample()
+                    if (latest != null) {
+                        currentMoodStore.restore(latest.moodScore.toFloat(), latest.recordedAt)
+                    } else {
+                        currentMoodStore.restore(CurrentMoodStore.DEFAULT_MOOD, 0L)
+                    }
+                }
+                savedCheckInId = null
+                savedMoodSampleId = null
+                resetDraft()
+                onFinished()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _uiState.update { it.copy(isDiscarding = false) }
+                _messages.trySend(error.message ?: "Could not discard this check-in.")
+            }
+        }
     }
 
-    fun onMoodChanged(score: Float) {
-        _uiState.update { it.copy(moodScore = score.coerceIn(0f, 10f)) }
+    /** Move the mood visual anchor. Does not mark mood as set. */
+    fun syncFromCommitted() {
+        _uiState.update { it.copy(moodAnchor = currentMoodStore.committedMood.value) }
+    }
+
+    fun onAxisChanged(axisId: String, score: Float) {
+        val value = score.roundToInt().coerceIn(0, 10)
+        _uiState.update { state ->
+            state.copy(axisDrafts = state.axisDrafts + (axisId to value))
+        }
+    }
+
+    fun clearAxis(axisId: String) {
+        _uiState.update { state ->
+            state.copy(axisDrafts = state.axisDrafts + (axisId to null))
+        }
     }
 
     fun onMoodNoteChanged(note: String) {
@@ -231,37 +358,116 @@ class CheckInViewModel(
         }
     }
 
-    fun saveMood() {
+    /** Opens the context screen without writing the check-in. */
+    fun openContextDraft() {
         val current = _uiState.value
         if (current.isSaving) return
-
+        val inputs = explicitInputs(current)
+        if (inputs.isEmpty()) {
+            _messages.trySend("Set at least one scale before saving.")
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isSaving = true) }
-            val score = current.moodScore.roundToInt().coerceIn(0, 10)
-            val recordedAt = current.loggedAtMillis
-            moodRepository.logMood(
-                moodScore = score,
-                note = current.moodNote,
-                emotion = current.selectedEmotion,
-                recordedAt = recordedAt,
-            )
-            currentMoodStore.commit(score.toFloat(), recordedAt)
-            _uiState.update {
-                it.copy(
-                    isSaving = false,
-                    moodNote = "",
-                    selectedEmotion = "",
-                    moodScore = score.toFloat(),
-                    loggedAtMillis = System.currentTimeMillis(),
+            try {
+                val preview = checkInRepository.previewContext(
+                    recordedAt = current.loggedAtMillis,
+                    checkInId = PendingCheckInSession.ID,
                 )
+                pending = PendingCheckInSession(
+                    CheckInContextWindow(
+                        checkInId = PendingCheckInSession.ID,
+                        previousCheckInId = preview.previousCheckInId,
+                        windowStartAt = preview.windowStartAt,
+                        windowEndAt = preview.windowEndAt,
+                        startBasis = preview.startBasis,
+                    ),
+                )
+                _uiState.update { it.copy(isSaving = false) }
+                openContextEvents.onSaved(PendingCheckInSession.ID)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _uiState.update { it.copy(isSaving = false) }
+                _messages.trySend(error.message ?: "Could not open this check-in.")
             }
-            _savedFeedback.trySend(Unit)
         }
     }
 
-    fun updateMood(sample: MoodSample, newScore: Int, newNote: String) {
+    /** Writes the check-in, reviewed context, and completion together. */
+    fun commitEntry(onFinished: () -> Unit) {
+        val current = _uiState.value
+        val session = pending
+        if (current.isSaving || session == null) return
+        val inputs = explicitInputs(current)
+        val storedEmotion = current.selectedEmotion.trim()
+        if (inputs.isEmpty() && storedEmotion.isEmpty()) {
+            _messages.trySend("Set at least one scale before saving.")
+            return
+        }
         viewModelScope.launch {
-            moodRepository.updateMood(sample, newScore, newNote)
+            _uiState.update { it.copy(isSaving = true) }
+            try {
+                val recordedAt = current.loggedAtMillis
+                val mood = inputs.firstOrNull { it.axisId == DefaultCheckInAxes.MOOD }
+                val legacyMood = mood?.let {
+                    LegacyCheckInMood(
+                        score = it.value,
+                        note = current.moodNote,
+                        emotion = storedEmotion,
+                        recordedAt = recordedAt,
+                    )
+                }
+                val saved = checkInRepository.saveCheckIn(
+                    axisValues = inputs,
+                    trigger = CheckInRecord.TRIGGER_MANUAL,
+                    note = current.moodNote,
+                    emotion = storedEmotion,
+                    recordedAt = recordedAt,
+                    legacyMood = legacyMood,
+                    activitySelections = session.activity.value,
+                    workoutSelections = session.workout.value,
+                    usageSelections = session.usage.value,
+                    mealSelections = session.diet.value,
+                    completedAt = System.currentTimeMillis(),
+                )
+                val cacheUpdate = updateMoodCacheAfterSubmission(legacyMood?.score) { score ->
+                    currentMoodStore.commit(score, recordedAt)
+                }
+                if (cacheUpdate is MoodCacheUpdate.Failed) {
+                    Log.w(
+                        "CheckInViewModel",
+                        "Mood cache update failed after check-in ${saved.record.id} was saved",
+                        cacheUpdate.error,
+                    )
+                }
+                resetDraft()
+                _savedFeedback.trySend(Unit)
+                onFinished()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _uiState.update { it.copy(isSaving = false) }
+                _messages.trySend(error.message ?: "Could not save check-in.")
+            }
+        }
+    }
+
+    private fun explicitInputs(current: CheckInUiState) = CheckInDrafts.toAxisInputs(current.axisDrafts)
+        .filter { it.axisId in current.enabledAxes.map { axis -> axis.id }.toSet() }
+
+    private fun resetDraft() {
+        pending = null
+        _uiState.update {
+            it.copy(
+                isSaving = false,
+                isDiscarding = false,
+                axisDrafts = emptyMap(),
+                moodNote = "",
+                selectedEmotion = "",
+                loggedAtMillis = System.currentTimeMillis(),
+                moodAnchor = currentMoodStore.committedMood.value,
+            )
         }
     }
 
@@ -269,6 +475,7 @@ class CheckInViewModel(
 
     class Factory(
         private val moodRepository: MoodRepository,
+        private val checkInRepository: CheckInRepository,
         private val sleepRepository: SleepRepository,
         private val currentMoodStore: CurrentMoodStore,
         private val biometricRepository: BiometricRepository,
@@ -277,6 +484,7 @@ class CheckInViewModel(
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             return CheckInViewModel(
                 moodRepository,
+                checkInRepository,
                 sleepRepository,
                 currentMoodStore,
                 biometricRepository,

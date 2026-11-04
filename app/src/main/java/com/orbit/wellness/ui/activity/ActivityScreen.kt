@@ -2,8 +2,6 @@ package com.orbit.wellness.ui.activity
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,18 +10,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -40,7 +35,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.orbit.wellness.R
 import com.orbit.wellness.data.local.ActivityEvent
-import com.orbit.wellness.ui.checkin.moodDescriptorResId
 import com.orbit.wellness.ui.history.EditActivityDialog
 import com.orbit.wellness.ui.util.CollectSavedFeedback
 import com.orbit.wellness.ui.util.CollectSnackbarMessages
@@ -51,7 +45,7 @@ import com.orbit.wellness.ui.util.rememberHideKeyboard
 import com.orbit.wellness.util.DateUtils
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ActivityScreen(
     viewModel: ActivityViewModel,
@@ -128,39 +122,31 @@ fun ActivityScreen(
         if (uiState.isLoading) {
             InlineLoading()
         } else {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                uiState.activityOptions.forEach { option ->
+            ActivityOptionPicker(
+                options = uiState.activityOptions,
+                isSelected = { option ->
                     val isActive = uiState.activeActivities.any {
                         it.activityName.equals(option.name, ignoreCase = true)
                     }
-                    val selected = when (uiState.logMode) {
+                    when (uiState.logMode) {
                         ActivityLogMode.Full ->
                             uiState.selectedName.equals(option.name, ignoreCase = true)
                         ActivityLogMode.Session -> isActive
                     }
-                    FilterChip(
-                        selected = selected,
-                        onClick = { viewModel.onActivityChipTapped(option.name) },
-                        label = {
-                            Text(
-                                text = if (uiState.logMode == ActivityLogMode.Session && isActive) {
-                                    stringResource(R.string.activity_active_label, option.name)
-                                } else {
-                                    option.name
-                                },
-                            )
-                        },
-                    )
-                }
-                FilterChip(
-                    selected = false,
-                    onClick = viewModel::openAddActivityDialog,
-                    label = { Text(stringResource(R.string.add_activity)) },
-                )
-            }
+                },
+                optionLabel = { option ->
+                    val isActive = uiState.activeActivities.any {
+                        it.activityName.equals(option.name, ignoreCase = true)
+                    }
+                    if (uiState.logMode == ActivityLogMode.Session && isActive) {
+                        stringResource(R.string.activity_active_label, option.name)
+                    } else {
+                        option.name
+                    }
+                },
+                onOptionClick = { option -> viewModel.onActivityChipTapped(option.name) },
+                onAddClick = viewModel::openAddActivityDialog,
+            )
         }
 
         if (uiState.logMode == ActivityLogMode.Full) {
@@ -172,11 +158,6 @@ fun ActivityScreen(
                 text = moodInt.toString(),
                 style = MaterialTheme.typography.displaySmall,
                 color = MaterialTheme.colorScheme.primary,
-            )
-            Text(
-                text = stringResource(moodDescriptorResId(moodInt)),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Slider(
                 value = uiState.moodScore,
@@ -241,33 +222,14 @@ fun ActivityScreen(
     }
 
     if (uiState.showAddActivityDialog) {
-        AlertDialog(
-            onDismissRequest = viewModel::dismissAddActivityDialog,
-            title = { Text(stringResource(R.string.add_activity_title)) },
-            text = {
-                OutlinedTextField(
-                    value = uiState.newActivityName,
-                    onValueChange = viewModel::onNewActivityNameChanged,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.add_activity_hint)) },
-                    singleLine = true,
-                )
+        AddActivityNameDialog(
+            name = uiState.newActivityName,
+            onNameChange = viewModel::onNewActivityNameChanged,
+            onConfirm = {
+                hideKeyboard()
+                viewModel.confirmAddActivity()
             },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        hideKeyboard()
-                        viewModel.confirmAddActivity()
-                    },
-                ) {
-                    Text(stringResource(R.string.add))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = viewModel::dismissAddActivityDialog) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
+            onDismiss = viewModel::dismissAddActivityDialog,
         )
     }
 
@@ -322,11 +284,6 @@ private fun ActivityMoodSheet(
                 text = moodInt.toString(),
                 style = MaterialTheme.typography.displaySmall,
                 color = MaterialTheme.colorScheme.primary,
-            )
-            Text(
-                text = stringResource(moodDescriptorResId(moodInt)),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Slider(
                 value = moodScore,

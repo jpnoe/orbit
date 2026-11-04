@@ -40,7 +40,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.orbit.wellness.R
 import com.orbit.wellness.data.local.SubstanceIntent
 import com.orbit.wellness.data.local.SubstanceUseEvent
-import com.orbit.wellness.ui.checkin.moodDescriptorResId
 import com.orbit.wellness.ui.history.EditSubstanceUseDialog
 import com.orbit.wellness.ui.util.CollectSavedFeedback
 import com.orbit.wellness.ui.util.CollectSnackbarMessages
@@ -202,11 +201,6 @@ fun UseScreen(
                 text = moodInt.toString(),
                 style = MaterialTheme.typography.displaySmall,
                 color = MaterialTheme.colorScheme.primary,
-            )
-            Text(
-                text = stringResource(moodDescriptorResId(moodInt)),
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),

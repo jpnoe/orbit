@@ -30,8 +30,18 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
         TopologyEdge::class,
         ClusterMeta::class,
         TopologyState::class,
+        CheckInAxis::class,
+        CheckInRecord::class,
+        CheckInAxisValue::class,
+        CheckInContextWindow::class,
+        CheckInContextCategory::class,
+        CheckInActivityItem::class,
+        CheckInWorkoutItem::class,
+        CheckInUsageItem::class,
+        CheckInMeal::class,
+        CheckInMealFoodItem::class,
     ],
-    version = 16,
+    version = 22,
     exportSchema = true,
 )
 abstract class OrbitDatabase : RoomDatabase() {
@@ -57,6 +67,7 @@ abstract class OrbitDatabase : RoomDatabase() {
     abstract fun topologyEdgeDao(): TopologyEdgeDao
     abstract fun clusterMetaDao(): ClusterMetaDao
     abstract fun topologyStateDao(): TopologyStateDao
+    abstract fun checkInDao(): CheckInDao
 
     companion object {
         private const val DB_NAME = "orbit_encrypted.db"
@@ -181,6 +192,10 @@ abstract class OrbitDatabase : RoomDatabase() {
             "Content",
             "Hopeful",
         )
+
+        suspend fun ensureDefaultCheckInAxes(dao: CheckInDao) {
+            dao.insertAxes(DefaultCheckInAxes.ALL)
+        }
 
         suspend fun ensureDefaultEmotions(dao: EmotionOptionDao) {
             if (dao.count() > 0) return

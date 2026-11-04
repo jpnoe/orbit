@@ -27,54 +27,41 @@ import androidx.compose.ui.unit.dp
 import com.orbit.wellness.OrbitApplication
 import com.orbit.wellness.R
 import com.orbit.wellness.data.ReminderPreferences
-import com.orbit.wellness.ui.history.HistoryScreen
-import com.orbit.wellness.ui.history.HistoryViewModel
-import com.orbit.wellness.ui.journal.JournalSection
-import com.orbit.wellness.ui.journal.JournalViewModel
 import com.orbit.wellness.ui.theme.AccentOption
-import com.orbit.wellness.ui.theme.AccentPicker
-import com.orbit.wellness.ui.trends.TrendsViewModel
 import com.orbit.wellness.ui.use.MyListsScreen
 import com.orbit.wellness.ui.use.MyListsViewModel
-import com.orbit.wellness.ui.util.CollectSavedFeedback
 import com.orbit.wellness.worker.ReminderScheduler
 import kotlinx.coroutines.launch
 
-private enum class ProfileTab {
-    JOURNAL,
-    HISTORY,
-    CONTACTS,
+enum class ProfileSection {
     MY_LISTS,
     HEALTH,
     SETTINGS,
 }
 
+object ProfileSections {
+    val visible: List<ProfileSection> = listOf(
+        ProfileSection.MY_LISTS,
+        ProfileSection.HEALTH,
+        ProfileSection.SETTINGS,
+    )
+    val defaultSection: ProfileSection = ProfileSection.MY_LISTS
+}
+
 @Composable
 fun ProfileScreen(
     listsViewModel: MyListsViewModel,
-    trustedContactsViewModel: TrustedContactsViewModel,
-    journalViewModel: JournalViewModel,
-    historyViewModel: HistoryViewModel,
-    trendsViewModel: TrendsViewModel,
     healthConnectViewModel: HealthConnectViewModel,
     snackbarHostState: SnackbarHostState,
     modifier: Modifier = Modifier,
 ) {
-    val journalUiState by journalViewModel.uiState.collectAsState()
-    val journalSaved = stringResource(R.string.journal_saved)
-    var activeTab by remember { mutableStateOf(ProfileTab.JOURNAL) }
+    var activeSection by remember { mutableStateOf(ProfileSections.defaultSection) }
     val application = LocalContext.current.applicationContext as OrbitApplication
     val selectedAccent by application.themePreferences.accent.collectAsState(initial = AccentOption.DEFAULT)
     val reminderTime by application.reminderPreferences.reminderTime.collectAsState(
         initial = ReminderPreferences.DEFAULT_TIME,
     )
     val scope = rememberCoroutineScope()
-
-    CollectSavedFeedback(
-        pulses = journalViewModel.savedFeedback,
-        message = journalSaved,
-        snackbarHostState = snackbarHostState,
-    )
 
     Column(
         modifier = modifier
@@ -88,121 +75,64 @@ fun ProfileScreen(
             style = MaterialTheme.typography.headlineMedium,
         )
 
-        AccentPicker(
-            selected = selectedAccent,
-            onSelect = { option ->
-                scope.launch { application.themePreferences.setAccent(option) }
-            },
-        )
-
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            FilterChip(
-                selected = activeTab == ProfileTab.JOURNAL,
-                onClick = { activeTab = ProfileTab.JOURNAL },
-                label = { Text(stringResource(R.string.journal_title)) },
-            )
-            FilterChip(
-                selected = activeTab == ProfileTab.HISTORY,
-                onClick = { activeTab = ProfileTab.HISTORY },
-                label = { Text(stringResource(R.string.history_title)) },
-            )
-            FilterChip(
-                selected = activeTab == ProfileTab.CONTACTS,
-                onClick = { activeTab = ProfileTab.CONTACTS },
-                label = { Text(stringResource(R.string.trusted_contacts_title)) },
-            )
-            FilterChip(
-                selected = activeTab == ProfileTab.MY_LISTS,
-                onClick = { activeTab = ProfileTab.MY_LISTS },
-                label = { Text(stringResource(R.string.my_lists_title)) },
-            )
-            FilterChip(
-                selected = activeTab == ProfileTab.HEALTH,
-                onClick = { activeTab = ProfileTab.HEALTH },
-                label = { Text(stringResource(R.string.health_connect_tab)) },
-            )
-            FilterChip(
-                selected = activeTab == ProfileTab.SETTINGS,
-                onClick = { activeTab = ProfileTab.SETTINGS },
-                label = { Text(stringResource(R.string.settings_tab)) },
-            )
-        }
-
-        when (activeTab) {
-            ProfileTab.HISTORY -> {
-                HistoryScreen(
-                    historyViewModel = historyViewModel,
-                    trendsViewModel = trendsViewModel,
-                    snackbarHostState = snackbarHostState,
-                    embedded = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
+            ProfileSections.visible.forEach { section ->
+                FilterChip(
+                    selected = activeSection == section,
+                    onClick = { activeSection = section },
+                    label = { Text(stringResource(section.labelRes())) },
                 )
             }
-            else -> {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    when (activeTab) {
-                        ProfileTab.JOURNAL -> {
-                            JournalSection(
-                                uiState = journalUiState,
-                                onNoteChanged = journalViewModel::onNoteChanged,
-                                onSave = journalViewModel::saveJournal,
-                                onEdit = journalViewModel::startEdit,
-                                onRequestDelete = journalViewModel::requestDelete,
-                                onDismissDelete = journalViewModel::dismissDelete,
-                                onConfirmDelete = journalViewModel::confirmDelete,
-                                onCancelEdit = journalViewModel::cancelEdit,
-                            )
-                        }
-                        ProfileTab.CONTACTS -> {
-                            TrustedContactsSection(
-                                viewModel = trustedContactsViewModel,
-                                snackbarHostState = snackbarHostState,
-                            )
-                        }
-                        ProfileTab.MY_LISTS -> {
-                            MyListsScreen(
-                                viewModel = listsViewModel,
-                                snackbarHostState = snackbarHostState,
-                                embedded = true,
-                            )
-                        }
-                        ProfileTab.HEALTH -> {
-                            HealthConnectSection(
-                                viewModel = healthConnectViewModel,
-                                snackbarHostState = snackbarHostState,
-                            )
-                        }
-                        ProfileTab.SETTINGS -> {
-                            SettingsSection(
-                                reminderTime = reminderTime,
-                                onReminderTimeChanged = { time ->
-                                    scope.launch {
-                                        application.reminderPreferences.setReminderTime(time)
-                                        ReminderScheduler.scheduleDailyReminder(
-                                            application,
-                                            time,
-                                        )
-                                    }
-                                },
-                            )
-                        }
-                        ProfileTab.HISTORY -> Unit
-                    }
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            when (activeSection) {
+                ProfileSection.MY_LISTS -> {
+                    MyListsScreen(
+                        viewModel = listsViewModel,
+                        snackbarHostState = snackbarHostState,
+                        embedded = true,
+                    )
+                }
+                ProfileSection.HEALTH -> {
+                    HealthConnectSection(
+                        viewModel = healthConnectViewModel,
+                        snackbarHostState = snackbarHostState,
+                    )
+                }
+                ProfileSection.SETTINGS -> {
+                    SettingsSection(
+                        reminderTime = reminderTime,
+                        onReminderTimeChanged = { time ->
+                            scope.launch {
+                                application.reminderPreferences.setReminderTime(time)
+                                ReminderScheduler.scheduleDailyReminder(application, time)
+                            }
+                        },
+                        selectedAccent = selectedAccent,
+                        onAccentSelected = { option ->
+                            scope.launch { application.themePreferences.setAccent(option) }
+                        },
+                    )
                 }
             }
         }
     }
+}
+
+private fun ProfileSection.labelRes(): Int = when (this) {
+    ProfileSection.MY_LISTS -> R.string.my_lists_title
+    ProfileSection.HEALTH -> R.string.health_connect_tab
+    ProfileSection.SETTINGS -> R.string.settings_tab
 }

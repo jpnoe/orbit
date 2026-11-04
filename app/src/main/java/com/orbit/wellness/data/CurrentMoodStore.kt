@@ -6,8 +6,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Last **logged** mood for seeding sliders.
- * Draft slider moves stay on the screen; leaving without logging snaps back here.
+ * Last logged mood. Check-in may display this as a visual anchor.
+ * Showing the anchor does not record an observation.
  */
 class CurrentMoodStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -31,9 +31,18 @@ class CurrentMoodStore(context: Context) {
     }
 
     /**
-     * Apply a DB mood sample if it is at least as new as the last commit
-     * (covers process death after check-in / activity logs).
+     * Apply a DB mood sample if it is at least as new as the last commit.
+     * This repairs the cache after process death, including when a check-in
+     * was saved and this preference write did not finish.
      */
+    /**
+     * Replaces the cached mood even when [recordedAt] is older.
+     * Used after a check-in is discarded so the cache matches the latest remaining sample.
+     */
+    fun restore(score: Float, recordedAt: Long) {
+        commit(score, recordedAt)
+    }
+
     fun hydrateFromSample(moodScore: Int, recordedAt: Long) {
         if (recordedAt >= committedAt) {
             commit(moodScore.toFloat(), recordedAt)

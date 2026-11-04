@@ -2,6 +2,7 @@ package com.orbit.wellness.data
 
 import com.orbit.wellness.data.local.ActivityEvent
 import com.orbit.wellness.data.local.ActivityEventDao
+import com.orbit.wellness.data.local.CheckInDao
 import com.orbit.wellness.data.local.MealEvent
 import com.orbit.wellness.data.local.MealEventDao
 import com.orbit.wellness.data.local.MealItem
@@ -65,6 +66,32 @@ sealed class HistoryItem {
         override val timestamp: Long get() = event.wakeTime
         override val id: String get() = "sleep-${event.id}"
     }
+
+    /**
+     * Contextual reports for one check-in, all dated at that mood log.
+     * [windowStartAt] is the previous mood log or the reported wake time.
+     * A day-start basis means no wake was reported, so the range begins at "Wakeup".
+     */
+    data class CheckInInterval(
+        val checkInId: String,
+        val recordedAt: Long,
+        val startBasis: String,
+        val windowStartAt: Long?,
+        val moodScore: Int?,
+        val energyScore: Int?,
+        val confidenceScore: Int?,
+        val anxietyScore: Int?,
+        val emotion: String,
+        val note: String,
+        val activities: List<String>,
+        val workouts: List<String>,
+        val meals: List<String>,
+        val usage: List<String>,
+        val moodSampleId: String?,
+    ) : HistoryItem() {
+        override val timestamp: Long get() = recordedAt
+        override val id: String get() = "check-in-$checkInId"
+    }
 }
 
 class HistoryRepository(
@@ -75,6 +102,7 @@ class HistoryRepository(
     private val workoutEventDao: WorkoutEventDao,
     private val substanceUseEventDao: SubstanceUseEventDao,
     private val sleepEventDao: SleepEventDao,
+    private val checkInDao: CheckInDao,
 ) {
     fun observeRecentHistory(daysBack: Long = 14): Flow<List<HistoryItem>> {
         val today = LocalDate.now()
@@ -98,26 +126,37 @@ class HistoryRepository(
             }
         }
 
-        val coreFlow = combine(
-            moodSampleDao.observeBetween(startDate, endDate),
+        val moodsFlow = moodSampleDao.observeBetween(startDate, endDate)
+        val intervalsFlow = observeCheckInIntervals(startMillis, endMillis, moodsFlow)
+        val detailedFlow = combine(
             activityEventDao.observeBetween(startMillis, endMillis),
             mealsFlow,
             workoutEventDao.observeBetween(startMillis, endMillis),
             substanceUseEventDao.observeBetween(startMillis, endMillis),
-        ) { moods, activities, meals, workouts, uses ->
+        ) { activities, meals, workouts, uses ->
+            DetailedHistory(activities, meals, workouts, uses)
+        }
+        val coreFlow = combine(
+            moodsFlow,
+            intervalsFlow,
+            detailedFlow,
+        ) { moods, intervals, detailed ->
+            val absorbed = CheckInIntervalHistory.absorbedMoodIds(intervals)
             buildList {
+                addAll(intervals)
                 moods.filter {
-                    it.source != MoodSample.SOURCE_ACTIVITY_PRE &&
+                    it.id !in absorbed &&
+                        it.source != MoodSample.SOURCE_ACTIVITY_PRE &&
                         it.source != MoodSample.SOURCE_ACTIVITY_POST &&
                         it.source != MoodSample.SOURCE_ACTIVITY_LOG &&
                         it.source != MoodSample.SOURCE_WORKOUT_PRE &&
                         it.source != MoodSample.SOURCE_WORKOUT_POST &&
                         it.source != MoodSample.SOURCE_WORKOUT_LOG
                 }.forEach { add(HistoryItem.Mood(it)) }
-                activities.forEach { add(HistoryItem.Activity(it)) }
-                addAll(meals)
-                workouts.forEach { add(HistoryItem.Workout(it)) }
-                uses.forEach { add(HistoryItem.SubstanceUse(it)) }
+                detailed.activities.forEach { add(HistoryItem.Activity(it)) }
+                addAll(detailed.meals)
+                detailed.workouts.forEach { add(HistoryItem.Workout(it)) }
+                detailed.uses.forEach { add(HistoryItem.SubstanceUse(it)) }
             }
         }
 
@@ -138,6 +177,7 @@ class HistoryRepository(
             is HistoryItem.Workout -> workoutEventDao.deleteById(item.event.id)
             is HistoryItem.SubstanceUse -> substanceUseEventDao.deleteById(item.event.id)
             is HistoryItem.Sleep -> sleepEventDao.deleteById(item.event.id)
+            is HistoryItem.CheckInInterval -> Unit
         }
     }
 
@@ -204,4 +244,61 @@ class HistoryRepository(
             ),
         )
     }
+
+    private fun observeCheckInIntervals(
+        startMillis: Long,
+        endMillis: Long,
+        moods: Flow<List<MoodSample>>,
+    ): Flow<List<HistoryItem.CheckInInterval>> {
+        val recordsFlow = combine(
+            checkInDao.observeCheckInsBetween(startMillis, endMillis),
+            checkInDao.observeContextWindows(),
+            checkInDao.observeActivityItems(),
+            checkInDao.observeAxisValues(),
+        ) { checkIns, windows, activities, axisValues ->
+            IntervalRecords(checkIns, windows, activities, axisValues)
+        }
+        val detailsFlow = combine(
+            checkInDao.observeWorkoutItems(),
+            checkInDao.observeUsageItems(),
+            checkInDao.observeMeals(),
+            checkInDao.observeMealFoods(),
+        ) { workouts, usage, meals, foods ->
+            IntervalDetails(workouts, usage, meals, foods)
+        }
+        return combine(recordsFlow, detailsFlow, moods) { records, details, moodSamples ->
+            CheckInIntervalHistory.build(
+                checkIns = records.checkIns,
+                windows = records.windows,
+                activities = records.activities,
+                axisValues = records.axisValues,
+                workouts = details.workouts,
+                usage = details.usage,
+                meals = details.meals,
+                foods = details.foods,
+                moods = moodSamples,
+            )
+        }
+    }
 }
+
+private data class DetailedHistory(
+    val activities: List<com.orbit.wellness.data.local.ActivityEvent>,
+    val meals: List<HistoryItem.Meal>,
+    val workouts: List<com.orbit.wellness.data.local.WorkoutEvent>,
+    val uses: List<com.orbit.wellness.data.local.SubstanceUseEvent>,
+)
+
+private data class IntervalRecords(
+    val checkIns: List<com.orbit.wellness.data.local.CheckInRecord>,
+    val windows: List<com.orbit.wellness.data.local.CheckInContextWindow>,
+    val activities: List<com.orbit.wellness.data.local.CheckInActivityItem>,
+    val axisValues: List<com.orbit.wellness.data.local.CheckInAxisValue>,
+)
+
+private data class IntervalDetails(
+    val workouts: List<com.orbit.wellness.data.local.CheckInWorkoutItem>,
+    val usage: List<com.orbit.wellness.data.local.CheckInUsageItem>,
+    val meals: List<com.orbit.wellness.data.local.CheckInMeal>,
+    val foods: List<com.orbit.wellness.data.local.CheckInMealFoodItem>,
+)

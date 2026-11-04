@@ -2,12 +2,17 @@ package com.orbit.wellness
 
 import android.app.Application
 import com.orbit.wellness.data.ActivityRepository
+import com.orbit.wellness.data.CheckInAnalysisRepository
+import com.orbit.wellness.data.CheckInRepository
 import com.orbit.wellness.data.CurrentMoodStore
 import com.orbit.wellness.data.DietRepository
 import com.orbit.wellness.data.ExerciseRepository
 import com.orbit.wellness.data.HistoryRepository
 import com.orbit.wellness.data.JournalRepository
 import com.orbit.wellness.data.MoodRepository
+import com.orbit.wellness.data.MoodSampleRemover
+import com.orbit.wellness.data.MoodSampleWriter
+import com.orbit.wellness.data.RoomDatabaseTransaction
 import com.orbit.wellness.data.ReminderPreferences
 import com.orbit.wellness.data.SleepRepository
 import com.orbit.wellness.data.SubstanceRepository
@@ -37,6 +42,10 @@ class OrbitApplication : Application() {
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     lateinit var moodRepository: MoodRepository
+        private set
+    lateinit var checkInRepository: CheckInRepository
+        private set
+    lateinit var checkInAnalysisRepository: CheckInAnalysisRepository
         private set
     lateinit var journalRepository: JournalRepository
         private set
@@ -80,6 +89,16 @@ class OrbitApplication : Application() {
             dao = database.moodSampleDao(),
             emotionDao = database.emotionOptionDao(),
         )
+        checkInAnalysisRepository = CheckInAnalysisRepository(database.checkInDao())
+        checkInRepository = CheckInRepository(
+            dao = database.checkInDao(),
+            moodSamples = MoodSampleWriter { sample -> database.moodSampleDao().insert(sample) },
+            moodRemover = MoodSampleRemover { id -> database.moodSampleDao().deleteById(id) },
+            transaction = RoomDatabaseTransaction(database),
+            wakeTimes = { localDate ->
+                database.sleepEventDao().getForDate(localDate)?.wakeTime
+            },
+        )
         journalRepository = JournalRepository(database.dailyJournalDao())
         activityRepository = ActivityRepository(
             eventDao = database.activityEventDao(),
@@ -110,6 +129,7 @@ class OrbitApplication : Application() {
             workoutEventDao = database.workoutEventDao(),
             substanceUseEventDao = database.substanceUseEventDao(),
             sleepEventDao = database.sleepEventDao(),
+            checkInDao = database.checkInDao(),
         )
         val summaryBuilder = StatusSummaryBuilder(
             moodSampleDao = database.moodSampleDao(),
@@ -165,6 +185,7 @@ class OrbitApplication : Application() {
             OrbitDatabase.ensureDefaultSubstances(database.substanceOptionDao())
             OrbitDatabase.ensureDefaultWorkoutTypes(database.workoutOptionDao())
             OrbitDatabase.ensureDefaultEmotions(database.emotionOptionDao())
+            OrbitDatabase.ensureDefaultCheckInAxes(database.checkInDao())
             moodRepository.getLatestSample()?.let { sample ->
                 currentMoodStore.hydrateFromSample(sample.moodScore, sample.recordedAt)
             }
