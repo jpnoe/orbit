@@ -234,7 +234,7 @@ class CheckInRepository(
 
     /**
      * Enqueues one interval import after the completion transaction has returned.
-     * A scheduler failure is logged and does not change the saved check-in.
+     * A scheduler failure does not change the saved check-in.
      */
     private fun scheduleIntervalCapture(checkInId: String) {
         try {

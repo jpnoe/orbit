@@ -62,35 +62,26 @@ class BiometricRepository(
     /**
      * Imports summaries for the exact stored context interval.
      * Does not recompute the boundary and does not write the check-in.
-     * An unavailable source or an empty result leaves no rows.
+     * A null read means Health Connect is unavailable or not permitted.
+     * An empty list is a valid read that found nothing yet.
      */
-    suspend fun captureInterval(window: CheckInContextWindow): SyncResult {
+    suspend fun captureInterval(window: CheckInContextWindow): IntervalCaptureOutcome {
         return try {
+            if (!reader.isAvailable() || !reader.hasAllReadPermissions()) {
+                return IntervalCaptureOutcome.Unavailable
+            }
             val read = reader.readInterval(
                 start = Instant.ofEpochMilli(window.windowStartAt),
                 end = Instant.ofEpochMilli(window.windowEndAt),
-            )
-            if (read == null) {
-                SyncResult(
-                    observations = emptyList(),
-                    error = null,
-                    notes = listOf("Health Connect is unavailable or not permitted. No interval observations were stored."),
-                )
+            ) ?: return IntervalCaptureOutcome.Unavailable
+            if (read.observations.isEmpty()) {
+                IntervalCaptureOutcome.Empty
             } else {
-                if (read.observations.isNotEmpty()) {
-                    wearableObservationDao.upsertAll(read.observations)
-                }
-                SyncResult(
-                    observations = read.observations,
-                    error = null,
-                    notes = read.notes,
-                )
+                wearableObservationDao.upsertAll(read.observations)
+                IntervalCaptureOutcome.Captured(read.observations)
             }
         } catch (e: Exception) {
-            SyncResult(
-                observations = emptyList(),
-                error = e.message ?: "Interval import failed.",
-            )
+            IntervalCaptureOutcome.Failed(e.message ?: "Interval import failed.")
         }
     }
 

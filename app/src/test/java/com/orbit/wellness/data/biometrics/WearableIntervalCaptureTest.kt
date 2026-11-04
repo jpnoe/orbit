@@ -12,7 +12,13 @@ import com.orbit.wellness.data.local.CheckInContextStartBasis
 import com.orbit.wellness.data.local.CheckInContextWindow
 import com.orbit.wellness.data.local.DefaultCheckInAxes
 import com.orbit.wellness.data.local.WearableMetric
+import com.orbit.wellness.worker.INTERVAL_CAPTURE_BACKOFF_MINUTES
+import com.orbit.wellness.worker.INTERVAL_CAPTURE_MAX_RETRIES
+import com.orbit.wellness.worker.IntervalCaptureAction
+import com.orbit.wellness.worker.intervalCaptureAction
+import com.orbit.wellness.worker.intervalCaptureWorkerResult
 import com.orbit.wellness.worker.intervalToCapture
+import androidx.work.ListenableWorker
 import com.orbit.wellness.data.local.SleepEvent
 import com.orbit.wellness.data.local.SleepEventDao
 import com.orbit.wellness.util.DateUtils
@@ -118,7 +124,7 @@ class WearableIntervalCaptureTest {
         val dao = MemoryWearableDao()
         val before = window(1_000, 5_000, CheckInContextStartBasis.WAKE_TIME)
         val result = BiometricRepository(reader, dao).captureInterval(before)
-        assertTrue(result.observations.isEmpty())
+        assertTrue(result is IntervalCaptureOutcome.Empty)
         assertTrue(dao.rows.isEmpty())
         assertEquals(before, before.copy())
     }
@@ -129,7 +135,7 @@ class WearableIntervalCaptureTest {
         val dao = MemoryWearableDao()
         val window = window(1_000, 2_000, CheckInContextStartBasis.DAY_START)
         val result = BiometricRepository(reader, dao).captureInterval(window)
-        assertTrue(result.error != null)
+        assertTrue(result is IntervalCaptureOutcome.Failed)
         assertTrue(dao.rows.isEmpty())
         assertEquals(1_000L, window.windowStartAt)
         assertEquals(2_000L, window.windowEndAt)
@@ -161,6 +167,96 @@ class WearableIntervalCaptureTest {
         )
         assertEquals(before, repository.getContextWindow("morning"))
         assertEquals(CheckInContextStartBasis.DAY_START, before?.startBasis)
+    }
+
+    @Test
+    fun intervalOutcomesChooseRetryOrSuccess() = runBlocking {
+        val stored = window(100, 400, CheckInContextStartBasis.WAKE_TIME).copy(completedAt = 500)
+        val observation = stepsAggregate(
+            count = 12,
+            start = Instant.ofEpochMilli(stored.windowStartAt),
+            end = Instant.ofEpochMilli(stored.windowEndAt),
+            importedAt = Instant.ofEpochMilli(stored.windowEndAt),
+        )
+        val capturedReader = SpyReader(result = WearableReadResult(listOf(observation), emptyList()))
+        val capturedDao = MemoryWearableDao()
+        val captured = BiometricRepository(capturedReader, capturedDao).captureInterval(stored)
+        assertTrue(captured is IntervalCaptureOutcome.Captured)
+        assertEquals(IntervalCaptureAction.SUCCEED, intervalCaptureAction(captured, 0))
+        assertEquals(ListenableWorker.Result.success(), intervalCaptureWorkerResult(captured, 0))
+        assertEquals(1, capturedDao.rows.size)
+
+        val empty = IntervalCaptureOutcome.Empty
+        assertEquals(IntervalCaptureAction.RETRY, intervalCaptureAction(empty, 0))
+        assertEquals(IntervalCaptureAction.RETRY, intervalCaptureAction(empty, 1))
+        assertEquals(IntervalCaptureAction.SUCCEED, intervalCaptureAction(empty, INTERVAL_CAPTURE_MAX_RETRIES))
+        assertEquals(ListenableWorker.Result.retry(), intervalCaptureWorkerResult(empty, 0))
+        assertEquals(ListenableWorker.Result.success(), intervalCaptureWorkerResult(empty, INTERVAL_CAPTURE_MAX_RETRIES))
+
+        val failed = IntervalCaptureOutcome.Failed("read failed")
+        assertEquals(IntervalCaptureAction.RETRY, intervalCaptureAction(failed, 0))
+        assertEquals(IntervalCaptureAction.SUCCEED, intervalCaptureAction(failed, INTERVAL_CAPTURE_MAX_RETRIES))
+
+        val unavailableReader = SpyReader(available = false)
+        val unavailable = BiometricRepository(unavailableReader, MemoryWearableDao()).captureInterval(stored)
+        assertTrue(unavailable is IntervalCaptureOutcome.Unavailable)
+        assertTrue(unavailableReader.intervals.isEmpty())
+        assertEquals(IntervalCaptureAction.SUCCEED, intervalCaptureAction(unavailable, 0))
+
+        val deniedReader = SpyReader(permitted = false)
+        val denied = BiometricRepository(deniedReader, MemoryWearableDao()).captureInterval(stored)
+        assertTrue(denied is IntervalCaptureOutcome.Unavailable)
+        assertTrue(deniedReader.intervals.isEmpty())
+        assertEquals(IntervalCaptureAction.SUCCEED, intervalCaptureAction(denied, 0))
+    }
+
+    @Test
+    fun everyAttemptReadsTheSameStoredInterval() = runBlocking {
+        val reader = SpyReader(result = WearableReadResult(emptyList(), emptyList()))
+        val repository = BiometricRepository(reader, MemoryWearableDao())
+        val stored = window(100, 400, CheckInContextStartBasis.PREVIOUS_CHECK_IN, previous = "earlier")
+            .copy(completedAt = 500)
+        repeat(INTERVAL_CAPTURE_MAX_RETRIES + 1) { attempt ->
+            val outcome = repository.captureInterval(stored)
+            assertTrue(outcome is IntervalCaptureOutcome.Empty)
+            val expected = if (attempt < INTERVAL_CAPTURE_MAX_RETRIES) {
+                IntervalCaptureAction.RETRY
+            } else {
+                IntervalCaptureAction.SUCCEED
+            }
+            assertEquals(expected, intervalCaptureAction(outcome, attempt))
+        }
+        assertEquals(
+            List(INTERVAL_CAPTURE_MAX_RETRIES + 1) { stored.windowStartAt to stored.windowEndAt },
+            reader.intervals,
+        )
+        assertEquals(stored.windowStartAt, reader.intervals.first().first)
+        assertEquals(stored.windowEndAt, reader.intervals.first().second)
+    }
+
+    @Test
+    fun repeatedCompletionKeepsTheOriginalUniqueRequest() = runBlocking {
+        val captures = KeepFirstWearableCapture()
+        val repository = repository(captures)
+        repository.saveCheckIn(
+            axisValues = listOf(CheckInAxisInput(DefaultCheckInAxes.MOOD, 6)),
+            trigger = "manual",
+            recordedAt = 2_000,
+            id = "saved",
+            completedAt = 2_500,
+        )
+        repository.completeContext("saved", completedAt = 9_000)
+        repository.completeContext("saved", completedAt = 9_500)
+        assertEquals(setOf("saved"), captures.requestedIds)
+        assertEquals("wearable_interval_capture:saved", intervalCaptureWorkName("saved"))
+        assertEquals(15L, INTERVAL_CAPTURE_BACKOFF_MINUTES)
+        val scheduler = source(
+            "src/main/java/com/orbit/wellness/worker/WearableIntervalCaptureWorker.kt",
+            "app/src/main/java/com/orbit/wellness/worker/WearableIntervalCaptureWorker.kt",
+        ).readText()
+        assertTrue(scheduler.contains("ExistingWorkPolicy.KEEP"))
+        assertTrue(scheduler.contains("BackoffPolicy.LINEAR"))
+        assertTrue(scheduler.contains("INTERVAL_CAPTURE_BACKOFF_MINUTES"))
     }
 
     @Test
@@ -217,12 +313,14 @@ class WearableIntervalCaptureTest {
     private class SpyReader(
         var result: WearableReadResult? = WearableReadResult(emptyList(), emptyList()),
         private val fail: Boolean = false,
+        private val available: Boolean = true,
+        private val permitted: Boolean = true,
     ) : WearableReadGateway {
         val intervals = mutableListOf<Pair<Long, Long>>()
 
         override fun sdkStatus(): Int = 3
-        override fun isAvailable(): Boolean = true
-        override suspend fun hasAllReadPermissions(): Boolean = true
+        override fun isAvailable(): Boolean = available
+        override suspend fun hasAllReadPermissions(): Boolean = permitted
         override suspend fun hasBackgroundReadPermission(): Boolean = true
         override suspend fun readObservations(now: Instant): WearableReadResult? = result
         override suspend fun readInterval(start: Instant, end: Instant): WearableReadResult? {
