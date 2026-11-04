@@ -10,8 +10,8 @@ import com.orbit.wellness.OrbitApplication
 import java.util.concurrent.TimeUnit
 
 /**
- * Hourly Health Connect → Room biometric sync + state-vector encode.
- * Requires HC read permissions (incl. background read when available).
+ * Hourly Health Connect import of wearable observations.
+ * Does not encode a state vector. Requires Health Connect read permission.
  */
 class BiometricSyncWorker(
     appContext: Context,
@@ -22,7 +22,7 @@ class BiometricSyncWorker(
         val app = applicationContext as? OrbitApplication
             ?: return Result.retry()
         return try {
-            app.biometricRepository.syncAndEncode()
+            app.biometricRepository.sync()
             Result.success()
         } catch (_: Exception) {
             Result.retry()

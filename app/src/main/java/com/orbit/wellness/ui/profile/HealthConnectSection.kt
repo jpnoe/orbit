@@ -27,11 +27,12 @@ import androidx.health.connect.client.PermissionController
 import com.orbit.wellness.BuildConfig
 import com.orbit.wellness.R
 import com.orbit.wellness.data.biometrics.HealthConnectPermissions
+import com.orbit.wellness.data.local.WearableObservation
+import com.orbit.wellness.data.local.WearableTemporalKind
 import com.orbit.wellness.ui.util.CollectSnackbarMessages
 import com.orbit.wellness.ui.util.InlineLoading
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
+import com.orbit.wellness.ui.wearable.wearableMetricLabelRes
+import com.orbit.wellness.util.DateUtils
 
 @Composable
 fun HealthConnectSection(
@@ -182,24 +183,28 @@ fun HealthConnectSection(
             InlineLoading()
         }
 
-        uiState.biometric?.let { bio ->
+        Text(
+            text = stringResource(R.string.health_connect_observations_title),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        if (uiState.observations.isEmpty()) {
             Text(
-                text = stringResource(R.string.health_connect_last_sync),
-                style = MaterialTheme.typography.titleMedium,
+                text = stringResource(R.string.health_connect_observations_empty),
+                style = MaterialTheme.typography.bodyMedium,
             )
+        } else {
+            val latestImport = uiState.observations.maxOf { it.importedAt }
             Text(
-                text = formatInstant(bio.syncedAt),
+                text = stringResource(
+                    R.string.health_connect_latest_import,
+                    DateUtils.datedTimeLabel(latestImport),
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-                Text(
-                    text = stringResource(
-                        R.string.health_connect_bio_lines,
-                        bio.restingHeartRateBpm?.toInt()?.toString() ?: "—",
-                        bio.stepsToday?.toString() ?: "—",
-                    ),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+            uiState.observations.forEach { observation ->
+                WearableObservationLine(observation)
+            }
         }
 
         if (uiState.syncNotes.isNotEmpty()) {
@@ -233,8 +238,30 @@ fun HealthConnectSection(
     }
 }
 
-private fun formatInstant(epochMillis: Long): String {
-    val formatter = DateTimeFormatter.ofPattern("MMM d, h:mm a")
-        .withZone(ZoneId.systemDefault())
-    return formatter.format(Instant.ofEpochMilli(epochMillis))
+@Composable
+private fun WearableObservationLine(observation: WearableObservation) {
+    val window = if (observation.temporalKind == WearableTemporalKind.POINT) {
+        DateUtils.datedTimeLabel(observation.observedStartAt)
+    } else {
+        DateUtils.timeRangeLabel(observation.observedStartAt, observation.observedEndAt)
+    }
+    Text(
+        text = stringResource(
+            R.string.health_connect_observation_line,
+            stringResource(wearableMetricLabelRes(observation.metric)),
+            formatWearableValue(observation),
+            window,
+        ),
+        style = MaterialTheme.typography.bodyMedium,
+    )
+}
+
+private fun formatWearableValue(observation: WearableObservation): String {
+    val whole = observation.value % 1.0 == 0.0
+    val number = if (whole) {
+        observation.value.toLong().toString()
+    } else {
+        String.format(java.util.Locale.US, "%.2f", observation.value)
+    }
+    return "$number ${observation.unit}"
 }

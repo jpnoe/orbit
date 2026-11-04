@@ -21,8 +21,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.orbit.wellness.R
+import com.orbit.wellness.data.WearableCoverage
 import com.orbit.wellness.data.local.DefaultCheckInAxes
 import com.orbit.wellness.ui.util.InlineLoading
+import com.orbit.wellness.ui.wearable.wearableMetricLabelRes
 import com.orbit.wellness.util.DateUtils
 
 @Composable
@@ -46,7 +48,7 @@ fun InsightsScreen(
         )
         when (val state = uiState) {
             InsightsUiState.Loading -> InlineLoading()
-            is InsightsUiState.Ready -> InsightsBody(state.content, onOpenLog)
+            is InsightsUiState.Ready -> InsightsBody(state.content, state.wearable, onOpenLog)
         }
     }
 }
@@ -54,6 +56,7 @@ fun InsightsScreen(
 @Composable
 private fun InsightsBody(
     content: InsightsContent,
+    wearable: WearableCoverage,
     onOpenLog: () -> Unit,
 ) {
     if (content.phase == InsightsPhase.EMPTY) {
@@ -71,6 +74,7 @@ private fun InsightsBody(
         ) {
             Text(stringResource(R.string.insights_open_log))
         }
+        WearableSection(wearable)
         return
     }
 
@@ -178,8 +182,59 @@ private fun InsightsBody(
         }
     }
 
+    WearableSection(wearable)
+
     Text(
         text = stringResource(R.string.insights_disclaimer),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun WearableSection(wearable: WearableCoverage) {
+    SectionTitle(R.string.insights_wearable_heading)
+    if (!wearable.hasObservations) {
+        Text(
+            text = stringResource(R.string.insights_wearable_empty),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        return
+    }
+    wearable.countByMetric.forEach { count ->
+        Text(
+            text = stringResource(
+                R.string.insights_wearable_count,
+                stringResource(wearableMetricLabelRes(count.metric)),
+                count.count,
+            ),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+    val earliest = wearable.earliestMeasurementAt
+    val latest = wearable.latestMeasurementAt
+    if (earliest != null && latest != null) {
+        val coverage = if (earliest == latest) {
+            DateUtils.datedTimeLabel(earliest)
+        } else {
+            DateUtils.timeRangeLabel(earliest, latest)
+        }
+        Text(
+            text = stringResource(R.string.insights_wearable_coverage, coverage),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+    wearable.latestImportedAt?.let { importedAt ->
+        Text(
+            text = stringResource(
+                R.string.insights_wearable_import,
+                DateUtils.datedTimeLabel(importedAt),
+            ),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+    Text(
+        text = stringResource(R.string.insights_wearable_note),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )

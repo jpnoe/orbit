@@ -1,5 +1,7 @@
 package com.orbit.wellness.domain.checkin
 
+import com.orbit.wellness.data.local.WearableObservation
+import com.orbit.wellness.data.local.WearableTemporalKind
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
@@ -65,6 +67,17 @@ data class TemporalWindowObservationV1(
 data class TemporalWindowAdjacencyV1(
     val earlierWindowId: String,
     val laterWindowId: String,
+)
+
+/**
+ * Ids of wearable observations that meet a window. The records themselves stay
+ * on the wearable stream and are not copied into the window or into a state.
+ */
+data class WearableWindowReferenceV1(
+    val definition: TemporalWindowDefinitionV1,
+    val pointObservationIds: List<String>,
+    val containedObservationIds: List<String>,
+    val overlappingObservationIds: List<String>,
 )
 
 data class CalendarDayCoverageV1(
@@ -192,6 +205,54 @@ object TemporalWindowProjector {
             startAt = startInclusiveAt,
             endAt = endExclusiveAt,
             boundaryBasis = TemporalBoundaryBasisV1.EXPLICIT,
+        )
+    }
+
+    /**
+     * Places wearable observations by measurement time. A point uses
+     * [WearableObservation.observedStartAt], not [WearableObservation.importedAt].
+     * An interval or cumulative window uses the same contained, overlapping,
+     * and outside rules as a context interval. Overlapping windows stay whole.
+     */
+    fun projectWearables(
+        observations: List<WearableObservation>,
+        definition: TemporalWindowDefinitionV1,
+    ): WearableWindowReferenceV1 {
+        val points = mutableListOf<WearableObservation>()
+        val contained = mutableListOf<WearableObservation>()
+        val overlapping = mutableListOf<WearableObservation>()
+        for (observation in observations) {
+            if (observation.temporalKind == WearableTemporalKind.POINT) {
+                val at = observation.observedStartAt
+                if (at >= definition.startAt && at < definition.endAt) {
+                    points += observation
+                }
+            } else {
+                when (
+                    classifyInterval(
+                        intervalStart = observation.observedStartAt,
+                        intervalEnd = observation.observedEndAt,
+                        windowStart = definition.startAt,
+                        windowEnd = definition.endAt,
+                    )
+                ) {
+                    IntervalPlacement.CONTAINED -> contained += observation
+                    IntervalPlacement.OVERLAPPING -> overlapping += observation
+                    IntervalPlacement.OUTSIDE -> Unit
+                }
+            }
+        }
+        return WearableWindowReferenceV1(
+            definition = definition,
+            pointObservationIds = points
+                .sortedWith(compareBy({ it.observedStartAt }, { it.id }))
+                .map { it.id },
+            containedObservationIds = contained
+                .sortedWith(compareBy({ it.observedStartAt }, { it.id }))
+                .map { it.id },
+            overlappingObservationIds = overlapping
+                .sortedWith(compareBy({ it.observedStartAt }, { it.id }))
+                .map { it.id },
         )
     }
 

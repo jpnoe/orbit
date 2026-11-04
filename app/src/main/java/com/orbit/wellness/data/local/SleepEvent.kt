@@ -6,8 +6,8 @@ import androidx.room.PrimaryKey
 import java.util.UUID
 
 /**
- * Manual sleep log for a check-in day (localDate = morning / wake day).
- * Health Connect import can populate the same shape later.
+ * A sleep record the person confirmed. Wearable sleep stays in
+ * [WearableObservation] and is not written here.
  */
 @Entity(
     tableName = "sleep_events",

@@ -7,35 +7,49 @@ import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.RestingHeartRateRecord
 import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.StepsRecord
+import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
-import com.orbit.wellness.data.local.BiometricSnapshot
+import com.orbit.wellness.data.local.WearableMethod
+import com.orbit.wellness.data.local.WearableMetric
+import com.orbit.wellness.data.local.WearableObservation
+import com.orbit.wellness.data.local.WearableTemporalKind
+import com.orbit.wellness.data.local.WearableUnit
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 
-data class BiometricReadResult(
-    val snapshot: BiometricSnapshot,
-    /** Human-readable notes for empty/missing metrics (shown in Health tab). */
+data class WearableReadResult(
+    val observations: List<WearableObservation>,
     val notes: List<String>,
-) {
-    /** Health tab cares about RHR + steps; sleep is for Mood prefill / encoder only. */
-    val hasWearableMetrics: Boolean
-        get() = snapshot.restingHeartRateBpm != null || snapshot.stepsToday != null
+)
+
+interface WearableReadGateway {
+    fun sdkStatus(): Int
+    fun isAvailable(): Boolean
+    suspend fun hasAllReadPermissions(): Boolean
+    suspend fun hasBackgroundReadPermission(): Boolean
+    suspend fun readObservations(now: Instant = Instant.now()): WearableReadResult?
+    suspend fun readLatestSleepSession(now: Instant = Instant.now()): SleepSessionSuggestion?
 }
 
 /**
- * Thin Health Connect reader → [BiometricSnapshot] fields.
- * Null fields mean that metric was unavailable (permission, no data, or Fitbit not writing).
+ * Reads Health Connect into provenance-bearing [WearableObservation] rows.
+ *
+ * An aggregate total has no Health Connect record id. Its window is the range
+ * requested here, and a later sync with a later end is a different row.
+ * [HeartRateRecord.Sample] has no id of its own; the parent record id is kept
+ * and the sample time is the measurement instant.
+ * Sleep stages are not copied. The session start and end are.
  */
 class HealthConnectReader(
     private val context: Context,
-) {
-    fun sdkStatus(): Int = HealthConnectClient.getSdkStatus(context.applicationContext)
+) : WearableReadGateway {
+    override fun sdkStatus(): Int = HealthConnectClient.getSdkStatus(context.applicationContext)
 
-    fun isAvailable(): Boolean =
+    override fun isAvailable(): Boolean =
         sdkStatus() == HealthConnectClient.SDK_AVAILABLE
 
     fun getClientOrNull(): HealthConnectClient? {
@@ -43,19 +57,19 @@ class HealthConnectReader(
         return HealthConnectClient.getOrCreate(context.applicationContext)
     }
 
-    suspend fun hasAllReadPermissions(): Boolean {
+    override suspend fun hasAllReadPermissions(): Boolean {
         val client = getClientOrNull() ?: return false
         val granted = client.permissionController.getGrantedPermissions()
         return granted.containsAll(HealthConnectPermissions.READ_PERMISSIONS)
     }
 
-    suspend fun hasBackgroundReadPermission(): Boolean {
+    override suspend fun hasBackgroundReadPermission(): Boolean {
         val client = getClientOrNull() ?: return false
         val granted = client.permissionController.getGrantedPermissions()
         return granted.containsAll(HealthConnectPermissions.BACKGROUND_PERMISSIONS)
     }
 
-    suspend fun readSnapshot(now: Instant = Instant.now()): BiometricReadResult? {
+    override suspend fun readObservations(now: Instant): WearableReadResult? {
         val client = getClientOrNull() ?: return null
         if (!hasAllReadPermissions()) return null
 
@@ -64,48 +78,45 @@ class HealthConnectReader(
         val lookback48h = now.minus(48, ChronoUnit.HOURS)
         val lookback7d = now.minus(7, ChronoUnit.DAYS)
         val notes = mutableListOf<String>()
+        val observations = mutableListOf<WearableObservation>()
 
-        val stepsToday = readStepsTotal(client, startOfDay, now, notes)
-        val rhr = readRestingOrFallbackHr(client, lookback7d, now, notes)
-        // Still captured for encoder; Mood tab owns the sleep UX via [readLatestSleepSession].
-        val sleepSession = readLatestSleepSessionInternal(client, lookback48h, now)
-        val sleepHours = sleepSession?.durationHours
-
-        if (stepsToday == null && rhr == null) {
-            notes += EMPTY_HC_HINT
+        observations += readSteps(client, startOfDay, now, notes)
+        observations += readHeartRate(client, lookback7d, now, notes)
+        readLatestSleepSessionInternal(client, lookback48h, now, notes)?.let { session ->
+            observations += session
         }
 
-        return BiometricReadResult(
-            snapshot = BiometricSnapshot(
-                syncedAt = now.toEpochMilli(),
-                restingHeartRateBpm = rhr,
-                stepsToday = stepsToday,
-                sleepHoursLast = sleepHours,
-                source = BiometricSnapshot.SOURCE_HEALTH_CONNECT,
-            ),
-            notes = notes,
-        )
+        val hasStepsOrHeart = observations.any { observation ->
+            observation.metric == WearableMetric.STEPS ||
+                observation.metric == WearableMetric.RESTING_HEART_RATE ||
+                observation.metric == WearableMetric.HEART_RATE_AVERAGE ||
+                observation.metric == WearableMetric.HEART_RATE_SAMPLE
+        }
+        if (!hasStepsOrHeart) notes += EMPTY_HC_HINT
+
+        return WearableReadResult(observations = observations, notes = notes)
     }
 
-    /**
-     * Latest overnight sleep session for Mood-tab prefill.
-     * Does not write Room — caller only seeds the widget until the user saves.
-     */
-    suspend fun readLatestSleepSession(
-        now: Instant = Instant.now(),
-    ): SleepSessionSuggestion? {
+    override suspend fun readLatestSleepSession(now: Instant): SleepSessionSuggestion? {
         val client = getClientOrNull() ?: return null
         if (!hasAllReadPermissions()) return null
         val lookback48h = now.minus(48, ChronoUnit.HOURS)
-        return readLatestSleepSessionInternal(client, lookback48h, now)
+        return readLatestSleepSessionInternal(client, lookback48h, now, mutableListOf())
+            ?.let { observation ->
+                SleepSessionSuggestion(
+                    bedtimeMillis = observation.observedStartAt,
+                    wakeTimeMillis = observation.observedEndAt,
+                    durationHours = observation.value,
+                )
+            }
     }
 
-    private suspend fun readStepsTotal(
+    private suspend fun readSteps(
         client: HealthConnectClient,
         start: Instant,
         end: Instant,
         notes: MutableList<String>,
-    ): Long? {
+    ): List<WearableObservation> {
         try {
             val aggregated = client.aggregate(
                 AggregateRequest(
@@ -113,11 +124,16 @@ class HealthConnectReader(
                     timeRangeFilter = TimeRangeFilter.between(start, end),
                 ),
             )[StepsRecord.COUNT_TOTAL]
-            if (aggregated != null) return aggregated
+            stepsAggregateOrAbsent(
+                count = aggregated,
+                start = start,
+                end = end,
+                importedAt = end,
+            )?.let { return listOf(it) }
         } catch (e: SecurityException) {
             notes += "Steps: permission denied."
             Log.w(TAG, "Steps aggregate security", e)
-            return null
+            return emptyList()
         } catch (e: Exception) {
             Log.w(TAG, "Steps aggregate failed, trying records", e)
         }
@@ -131,27 +147,34 @@ class HealthConnectReader(
             ).records
             if (records.isEmpty()) {
                 notes += "Steps: no records in Health Connect for today."
-                null
+                emptyList()
             } else {
-                records.sumOf { it.count }
+                records.mapNotNull { record ->
+                    if (!record.endTime.isAfter(record.startTime)) {
+                        notes += "Steps: skipped a record with no positive duration."
+                        null
+                    } else {
+                        stepsRecord(record, importedAt = end)
+                    }
+                }
             }
         } catch (e: SecurityException) {
             notes += "Steps: permission denied."
             Log.w(TAG, "Steps records security", e)
-            null
+            emptyList()
         } catch (e: Exception) {
             notes += "Steps: read failed (${e.message ?: "error"})."
             Log.w(TAG, "Steps records failed", e)
-            null
+            emptyList()
         }
     }
 
-    private suspend fun readRestingOrFallbackHr(
+    private suspend fun readHeartRate(
         client: HealthConnectClient,
         start: Instant,
         end: Instant,
         notes: MutableList<String>,
-    ): Double? {
+    ): List<WearableObservation> {
         try {
             val resting = client.readRecords(
                 ReadRecordsRequest(
@@ -161,33 +184,38 @@ class HealthConnectReader(
             ).records
             val latest = resting.maxByOrNull { it.time }
             if (latest != null) {
-                return latest.beatsPerMinute.toDouble()
+                return listOf(restingHeartRate(latest, importedAt = end))
             }
         } catch (e: SecurityException) {
-            notes += "Resting HR: permission denied."
+            notes += "Resting heart rate: permission denied."
             Log.w(TAG, "RHR security", e)
+            return emptyList()
         } catch (e: Exception) {
             Log.w(TAG, "RHR read failed", e)
         }
 
+        val averageStart = end.minus(6, ChronoUnit.HOURS)
         try {
             val avg = client.aggregate(
                 AggregateRequest(
                     metrics = setOf(HeartRateRecord.BPM_AVG),
-                    timeRangeFilter = TimeRangeFilter.between(
-                        end.minus(6, ChronoUnit.HOURS),
-                        end,
-                    ),
+                    timeRangeFilter = TimeRangeFilter.between(averageStart, end),
                 ),
             )[HeartRateRecord.BPM_AVG]
-            if (avg != null) {
-                notes += "RHR: using 6h heart-rate average (no Resting HR in HC)."
-                return avg.toDouble()
+            val average = heartRateAverageOrAbsent(
+                beatsPerMinute = avg,
+                start = averageStart,
+                end = end,
+                importedAt = end,
+            )
+            if (average != null) {
+                notes += "Heart rate: no resting-heart-rate record. Stored a 6-hour average."
+                return listOf(average)
             }
         } catch (e: SecurityException) {
             notes += "Heart rate: permission denied — re-grant Health Connect access."
             Log.w(TAG, "HR aggregate security", e)
-            return null
+            return emptyList()
         } catch (e: Exception) {
             Log.w(TAG, "HR aggregate failed", e)
         }
@@ -196,32 +224,31 @@ class HealthConnectReader(
             val records = client.readRecords(
                 ReadRecordsRequest(
                     recordType = HeartRateRecord::class,
-                    timeRangeFilter = TimeRangeFilter.between(
-                        end.minus(6, ChronoUnit.HOURS),
-                        end,
-                    ),
+                    timeRangeFilter = TimeRangeFilter.between(averageStart, end),
                 ),
             ).records
-            val samples = records.flatMap { it.samples }
-            val latest = samples.maxByOrNull { it.time }
+            val latest = records
+                .flatMap { record -> record.samples.map { sample -> record to sample } }
+                .maxByOrNull { (_, sample) -> sample.time }
             if (latest != null) {
-                notes += "RHR: using latest heart-rate sample (no Resting HR in HC)."
-                return latest.beatsPerMinute.toDouble()
+                notes += "Heart rate: no resting-heart-rate record. Stored the latest sample."
+                return listOf(heartRateSample(latest.first, latest.second, importedAt = end))
             }
         } catch (e: Exception) {
             Log.w(TAG, "HR records failed", e)
         }
 
-        notes += "RHR / HR: no heart-rate data in Health Connect."
-        return null
+        notes += "Heart rate: no resting, average, or sample data in Health Connect."
+        return emptyList()
     }
 
     private suspend fun readLatestSleepSessionInternal(
         client: HealthConnectClient,
         start: Instant,
         end: Instant,
-    ): SleepSessionSuggestion? {
-        try {
+        notes: MutableList<String>,
+    ): WearableObservation? {
+        return try {
             val sessions = client.readRecords(
                 ReadRecordsRequest(
                     recordType = SleepSessionRecord::class,
@@ -229,22 +256,163 @@ class HealthConnectReader(
                 ),
             ).records
             val session = sessions.maxByOrNull { it.endTime } ?: return null
-            val millis = ChronoUnit.MILLIS.between(session.startTime, session.endTime)
-                .coerceAtLeast(0L)
-            return SleepSessionSuggestion(
-                bedtimeMillis = session.startTime.toEpochMilli(),
-                wakeTimeMillis = session.endTime.toEpochMilli(),
-                durationHours = millis / 3_600_000.0,
-            )
+            if (!session.endTime.isAfter(session.startTime)) {
+                notes += "Sleep: skipped a session with no positive duration."
+                return null
+            }
+            sleepSession(session, importedAt = end)
         } catch (e: Exception) {
             Log.w(TAG, "Sleep session read failed", e)
-            return null
+            notes += "Sleep: read failed (${e.message ?: "error"})."
+            null
         }
     }
 
     companion object {
         private const val TAG = "HealthConnectReader"
         const val EMPTY_HC_HINT =
-            "Health Connect has no steps / heart-rate yet. In the Fitbit app, enable writing to Health Connect, then confirm data under Health Connect → Data and access. Sleep is used to prefill the Mood tab, not this panel."
+            "Health Connect has no steps or heart-rate yet. In the Fitbit app, enable writing to Health Connect, then confirm data under Health Connect → Data and access."
+    }
+}
+
+internal fun stepsAggregateOrAbsent(
+    count: Long?,
+    start: Instant,
+    end: Instant,
+    importedAt: Instant,
+): WearableObservation? {
+    if (count == null) return null
+    return stepsAggregate(count, start, end, importedAt)
+}
+
+internal fun heartRateAverageOrAbsent(
+    beatsPerMinute: Long?,
+    start: Instant,
+    end: Instant,
+    importedAt: Instant,
+): WearableObservation? {
+    if (beatsPerMinute == null) return null
+    return heartRateAverage(beatsPerMinute, start, end, importedAt)
+}
+
+internal fun stepsAggregate(
+    count: Long,
+    start: Instant,
+    end: Instant,
+    importedAt: Instant,
+): WearableObservation {
+    return WearableObservation.create(
+        metric = WearableMetric.STEPS,
+        value = count.toDouble(),
+        unit = WearableUnit.COUNT,
+        observedStartAt = start.toEpochMilli(),
+        observedEndAt = end.toEpochMilli(),
+        temporalKind = WearableTemporalKind.AGGREGATED_WINDOW,
+        method = WearableMethod.AGGREGATE_TOTAL,
+        importedAt = importedAt.toEpochMilli(),
+    )
+}
+
+internal fun stepsRecord(record: StepsRecord, importedAt: Instant): WearableObservation {
+    return WearableObservation.create(
+        metric = WearableMetric.STEPS,
+        value = record.count.toDouble(),
+        unit = WearableUnit.COUNT,
+        observedStartAt = record.startTime.toEpochMilli(),
+        observedEndAt = record.endTime.toEpochMilli(),
+        temporalKind = WearableTemporalKind.AGGREGATED_WINDOW,
+        method = WearableMethod.STEPS_RECORD,
+        originPackage = record.metadata.dataOrigin.packageName,
+        sourceRecordId = stableRecordId(record.metadata),
+        recordingMethod = recordingMethodLabel(record.metadata),
+        importedAt = importedAt.toEpochMilli(),
+    )
+}
+
+internal fun restingHeartRate(record: RestingHeartRateRecord, importedAt: Instant): WearableObservation {
+    val at = record.time.toEpochMilli()
+    return WearableObservation.create(
+        metric = WearableMetric.RESTING_HEART_RATE,
+        value = record.beatsPerMinute.toDouble(),
+        unit = WearableUnit.BEATS_PER_MINUTE,
+        observedStartAt = at,
+        observedEndAt = at,
+        temporalKind = WearableTemporalKind.POINT,
+        method = WearableMethod.RESTING_HEART_RATE_RECORD,
+        originPackage = record.metadata.dataOrigin.packageName,
+        sourceRecordId = stableRecordId(record.metadata),
+        recordingMethod = recordingMethodLabel(record.metadata),
+        importedAt = importedAt.toEpochMilli(),
+    )
+}
+
+internal fun heartRateAverage(
+    beatsPerMinute: Long,
+    start: Instant,
+    end: Instant,
+    importedAt: Instant,
+): WearableObservation {
+    return WearableObservation.create(
+        metric = WearableMetric.HEART_RATE_AVERAGE,
+        value = beatsPerMinute.toDouble(),
+        unit = WearableUnit.BEATS_PER_MINUTE,
+        observedStartAt = start.toEpochMilli(),
+        observedEndAt = end.toEpochMilli(),
+        temporalKind = WearableTemporalKind.AGGREGATED_WINDOW,
+        method = WearableMethod.HEART_RATE_AVERAGE,
+        importedAt = importedAt.toEpochMilli(),
+    )
+}
+
+internal fun heartRateSample(
+    record: HeartRateRecord,
+    sample: HeartRateRecord.Sample,
+    importedAt: Instant,
+): WearableObservation {
+    val at = sample.time.toEpochMilli()
+    return WearableObservation.create(
+        metric = WearableMetric.HEART_RATE_SAMPLE,
+        value = sample.beatsPerMinute.toDouble(),
+        unit = WearableUnit.BEATS_PER_MINUTE,
+        observedStartAt = at,
+        observedEndAt = at,
+        temporalKind = WearableTemporalKind.POINT,
+        method = WearableMethod.HEART_RATE_SAMPLE,
+        originPackage = record.metadata.dataOrigin.packageName,
+        sourceRecordId = stableRecordId(record.metadata),
+        recordingMethod = recordingMethodLabel(record.metadata),
+        importedAt = importedAt.toEpochMilli(),
+    )
+}
+
+internal fun sleepSession(record: SleepSessionRecord, importedAt: Instant): WearableObservation {
+    val start = record.startTime.toEpochMilli()
+    val end = record.endTime.toEpochMilli()
+    val hours = (end - start).coerceAtLeast(0L) / 3_600_000.0
+    return WearableObservation.create(
+        metric = WearableMetric.SLEEP_DURATION,
+        value = hours,
+        unit = WearableUnit.HOURS,
+        observedStartAt = start,
+        observedEndAt = end,
+        temporalKind = WearableTemporalKind.MEASURED_INTERVAL,
+        method = WearableMethod.SLEEP_SESSION,
+        originPackage = record.metadata.dataOrigin.packageName,
+        sourceRecordId = stableRecordId(record.metadata),
+        recordingMethod = recordingMethodLabel(record.metadata),
+        importedAt = importedAt.toEpochMilli(),
+    )
+}
+
+internal fun stableRecordId(metadata: Metadata): String? {
+    return metadata.id.takeIf { it.isNotBlank() }
+}
+
+internal fun recordingMethodLabel(metadata: Metadata): String {
+    return when (metadata.recordingMethod) {
+        Metadata.RECORDING_METHOD_AUTOMATICALLY_RECORDED -> "automatically_recorded"
+        Metadata.RECORDING_METHOD_MANUAL_ENTRY -> "manual_entry"
+        Metadata.RECORDING_METHOD_ACTIVELY_RECORDED -> "actively_recorded"
+        else -> "unknown"
     }
 }

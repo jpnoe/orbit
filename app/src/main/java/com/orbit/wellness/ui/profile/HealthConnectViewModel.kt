@@ -4,10 +4,9 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.orbit.wellness.data.WearableObservationRepository
 import com.orbit.wellness.data.biometrics.BiometricRepository
-import com.orbit.wellness.data.local.BiometricSnapshot
-import com.orbit.wellness.data.local.StateVectorSnapshot
-import com.orbit.wellness.domain.state.StateVector
+import com.orbit.wellness.data.local.WearableObservation
 import com.orbit.wellness.domain.topology.TopologyHarness
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,15 +21,14 @@ data class HealthConnectUiState(
     val sdkStatusCode: Int = HealthConnectClient.SDK_UNAVAILABLE,
     val hasPermissions: Boolean = false,
     val isBusy: Boolean = false,
-    val biometric: BiometricSnapshot? = null,
-    val stateVector: StateVectorSnapshot? = null,
+    val observations: List<WearableObservation> = emptyList(),
     val axisRows: List<Pair<String, Float>> = emptyList(),
-    /** Last sync diagnostics (empty HC, Fitbit not writing, HR fallback, etc.). */
     val syncNotes: List<String> = emptyList(),
 )
 
 class HealthConnectViewModel(
     private val biometricRepository: BiometricRepository,
+    private val wearableObservations: WearableObservationRepository,
     private val topologyHarness: TopologyHarness? = null,
 ) : ViewModel() {
 
@@ -43,20 +41,8 @@ class HealthConnectViewModel(
     init {
         refreshAvailability()
         viewModelScope.launch {
-            biometricRepository.observeLatestBiometric().collect { snapshot ->
-                _uiState.update { it.copy(biometric = snapshot) }
-            }
-        }
-        viewModelScope.launch {
-            biometricRepository.observeLatestStateVector().collect { snapshot ->
-                _uiState.update {
-                    it.copy(
-                        stateVector = snapshot,
-                        axisRows = snapshot?.let { s ->
-                            StateVector.fromSnapshot(s).labeledPairs()
-                        } ?: emptyList(),
-                    )
-                }
+            wearableObservations.observe().collect { observations ->
+                _uiState.update { it.copy(observations = observations) }
             }
         }
     }
@@ -96,27 +82,19 @@ class HealthConnectViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isBusy = true) }
             try {
-                val result = biometricRepository.syncAndEncode()
+                val result = biometricRepository.sync()
                 _uiState.update {
                     it.copy(
                         hasPermissions = biometricRepository.hasReadPermissions(),
-                        axisRows = result.stateVector.labeledPairs(),
                         syncNotes = result.notes,
                     )
                 }
                 when {
-                    result.biometricError != null && result.biometric == null -> {
-                        _messages.trySend(result.biometricError)
-                    }
-                    result.biometricError != null -> {
-                        _messages.trySend(result.biometricError)
-                    }
+                    result.error != null -> _messages.trySend(result.error)
                     result.notes.isNotEmpty() -> {
                         _messages.trySend("Synced with notes — see details below.")
                     }
-                    else -> {
-                        _messages.trySend("Synced Health Connect and encoded state vector.")
-                    }
+                    else -> _messages.trySend("Synced wearable observations.")
                 }
             } catch (e: Exception) {
                 _messages.trySend(e.message ?: "Sync failed.")
@@ -132,7 +110,7 @@ class HealthConnectViewModel(
             try {
                 val vector = biometricRepository.encodeOnly()
                 _uiState.update { it.copy(axisRows = vector.labeledPairs()) }
-                _messages.trySend("Encoded state vector from Room (no HC pull).")
+                _messages.trySend("Encoded the dormant state vector. Wearable sync was not run.")
             } catch (e: Exception) {
                 _messages.trySend(e.message ?: "Encode failed.")
             } finally {
@@ -165,11 +143,16 @@ class HealthConnectViewModel(
 
     class Factory(
         private val biometricRepository: BiometricRepository,
+        private val wearableObservations: WearableObservationRepository,
         private val topologyHarness: TopologyHarness? = null,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return HealthConnectViewModel(biometricRepository, topologyHarness) as T
+            return HealthConnectViewModel(
+                biometricRepository,
+                wearableObservations,
+                topologyHarness,
+            ) as T
         }
     }
 }

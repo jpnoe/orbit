@@ -1,113 +1,96 @@
 package com.orbit.wellness.data.biometrics
 
-import com.orbit.wellness.data.local.BiometricSnapshot
-import com.orbit.wellness.data.local.BiometricSnapshotDao
-import com.orbit.wellness.data.local.StateVectorSnapshot
-import com.orbit.wellness.data.local.StateVectorSnapshotDao
+import android.util.Log
+import com.orbit.wellness.data.local.WearableObservation
+import com.orbit.wellness.data.local.WearableObservationDao
 import com.orbit.wellness.domain.state.StateEncoder
 import com.orbit.wellness.domain.state.StateVector
 import com.orbit.wellness.domain.topology.TopologyRepository
-import android.util.Log
-import kotlinx.coroutines.flow.Flow
+import java.time.Instant
 
 /**
- * Syncs Health Connect → Room biometric snapshot, then runs [StateEncoder] into Room.
+ * Imports Health Connect observations into Room.
+ * Sync does not encode a state vector or ingest topology. [encodeOnly] remains
+ * only for the dormant ten-axis path.
  */
 class BiometricRepository(
-    private val reader: HealthConnectReader,
-    private val biometricSnapshotDao: BiometricSnapshotDao,
-    private val stateVectorSnapshotDao: StateVectorSnapshotDao,
-    private val stateEncoder: StateEncoder,
-    private val topologyRepository: TopologyRepository,
+    private val reader: WearableReadGateway,
+    private val wearableObservationDao: WearableObservationDao,
+    private val dormantEncoder: StateEncoder? = null,
+    private val dormantTopology: TopologyRepository? = null,
 ) {
-    fun observeLatestBiometric(): Flow<BiometricSnapshot?> =
-        biometricSnapshotDao.observeLatest()
-
-    fun observeLatestStateVector(): Flow<StateVectorSnapshot?> =
-        stateVectorSnapshotDao.observeLatest()
-
-    suspend fun getLatestBiometric(): BiometricSnapshot? = biometricSnapshotDao.getLatest()
-
-    suspend fun getLatestStateVector(): StateVector? =
-        stateVectorSnapshotDao.getLatest()?.let(StateVector::fromSnapshot)
-
     fun isHealthConnectAvailable(): Boolean = reader.isAvailable()
 
     fun sdkStatus(): Int = reader.sdkStatus()
 
     suspend fun hasReadPermissions(): Boolean = reader.hasAllReadPermissions()
 
-    /**
-     * Pull HC metrics into Room, then encode + persist the 10-axis state vector.
-     * Encoding still runs (manual axes only) if HC is unavailable or denied.
-     */
-    suspend fun syncAndEncode(): SyncResult {
-        var biometric: BiometricSnapshot? = null
-        var biometricError: String? = null
-        var notes: List<String> = emptyList()
-
+    suspend fun sync(now: Instant = Instant.now()): SyncResult {
         when {
             !reader.isAvailable() -> {
-                biometricError = "Health Connect is not available on this device."
+                return SyncResult(
+                    observations = emptyList(),
+                    error = "Health Connect is not available on this device.",
+                )
             }
             !reader.hasAllReadPermissions() -> {
-                biometricError = "Health Connect permissions are not granted (or need re-grant for heart rate)."
-            }
-            else -> {
-                try {
-                    val read = reader.readSnapshot()
-                    if (read != null) {
-                        biometricSnapshotDao.insert(read.snapshot)
-                        biometric = read.snapshot
-                        notes = read.notes
-                        if (!read.hasWearableMetrics) {
-                            biometricError = read.notes.lastOrNull()
-                                ?: "Synced, but Health Connect returned no steps / heart rate."
-                        }
-                    } else {
-                        biometricError = "No biometric data returned from Health Connect."
-                    }
-                } catch (e: Exception) {
-                    biometricError = e.message ?: "Health Connect sync failed."
-                }
+                return SyncResult(
+                    observations = emptyList(),
+                    error = "Health Connect permissions are not granted (or need re-grant for heart rate).",
+                )
             }
         }
-
-        val snapshot = stateEncoder.encodeAndPersist()
-        ingestTopology(snapshot)
-        return SyncResult(
-            biometric = biometric ?: biometricSnapshotDao.getLatest(),
-            stateVector = StateVector.fromSnapshot(snapshot),
-            biometricError = biometricError,
-            notes = notes,
-        )
+        return try {
+            val read = reader.readObservations(now)
+            if (read == null) {
+                SyncResult(
+                    observations = emptyList(),
+                    error = "No wearable data returned from Health Connect.",
+                )
+            } else {
+                if (read.observations.isNotEmpty()) {
+                    wearableObservationDao.upsertAll(read.observations)
+                }
+                SyncResult(
+                    observations = read.observations,
+                    error = null,
+                    notes = read.notes,
+                )
+            }
+        } catch (e: Exception) {
+            SyncResult(
+                observations = emptyList(),
+                error = e.message ?: "Health Connect sync failed.",
+            )
+        }
     }
 
     /**
-     * Latest overnight sleep from Health Connect for Mood-tab prefill (not persisted).
+     * Latest overnight sleep from Health Connect for the log-screen prefill.
+     * This does not write a manual sleep record or a wearable observation.
      */
     suspend fun suggestSleepFromHealthConnect(): SleepSessionSuggestion? =
         reader.readLatestSleepSession()
 
-    /** Encode from existing Room data without a new HC pull. */
     suspend fun encodeOnly(): StateVector {
-        val snapshot = stateEncoder.encodeAndPersist()
-        ingestTopology(snapshot)
+        val encoder = checkNotNull(dormantEncoder) {
+            "The dormant state encoder is not configured."
+        }
+        val snapshot = encoder.encodeAndPersist()
+        val topology = dormantTopology
+        if (topology != null) {
+            try {
+                topology.ingest(snapshot)
+            } catch (e: Exception) {
+                Log.w("OrbitTopology", "ingest failed; encode still persisted", e)
+            }
+        }
         return StateVector.fromSnapshot(snapshot)
     }
 
-    private suspend fun ingestTopology(snapshot: StateVectorSnapshot) {
-        try {
-            topologyRepository.ingest(snapshot)
-        } catch (e: Exception) {
-            Log.w("OrbitTopology", "ingest failed; encode still persisted", e)
-        }
-    }
-
     data class SyncResult(
-        val biometric: BiometricSnapshot?,
-        val stateVector: StateVector,
-        val biometricError: String?,
+        val observations: List<WearableObservation>,
+        val error: String?,
         val notes: List<String> = emptyList(),
     )
 }

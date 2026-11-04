@@ -17,6 +17,7 @@ import com.orbit.wellness.data.ReminderPreferences
 import com.orbit.wellness.data.SleepRepository
 import com.orbit.wellness.data.SubstanceRepository
 import com.orbit.wellness.data.ThemePreferences
+import com.orbit.wellness.data.WearableObservationRepository
 import com.orbit.wellness.data.biometrics.BiometricRepository
 import com.orbit.wellness.data.biometrics.HealthConnectReader
 import com.orbit.wellness.data.local.DatabaseKeyManager
@@ -46,6 +47,8 @@ class OrbitApplication : Application() {
     lateinit var checkInRepository: CheckInRepository
         private set
     lateinit var checkInAnalysisRepository: CheckInAnalysisRepository
+        private set
+    lateinit var wearableObservationRepository: WearableObservationRepository
         private set
     lateinit var journalRepository: JournalRepository
         private set
@@ -90,6 +93,7 @@ class OrbitApplication : Application() {
             emotionDao = database.emotionOptionDao(),
         )
         checkInAnalysisRepository = CheckInAnalysisRepository(database.checkInDao())
+        wearableObservationRepository = WearableObservationRepository(database.wearableObservationDao())
         checkInRepository = CheckInRepository(
             dao = database.checkInDao(),
             moodSamples = MoodSampleWriter { sample -> database.moodSampleDao().insert(sample) },
@@ -173,10 +177,9 @@ class OrbitApplication : Application() {
         )
         biometricRepository = BiometricRepository(
             reader = HealthConnectReader(this),
-            biometricSnapshotDao = database.biometricSnapshotDao(),
-            stateVectorSnapshotDao = database.stateVectorSnapshotDao(),
-            stateEncoder = stateEncoder,
-            topologyRepository = topologyRepository,
+            wearableObservationDao = database.wearableObservationDao(),
+            dormantEncoder = stateEncoder,
+            dormantTopology = topologyRepository,
         )
 
         applicationScope.launch {

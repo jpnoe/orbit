@@ -388,7 +388,10 @@ fun OrbitApp(
             }
             composable(OrbitDestination.Insights.route) {
                 val insightsViewModel: InsightsViewModel = viewModel(
-                    factory = InsightsViewModel.Factory(application.checkInAnalysisRepository),
+                    factory = InsightsViewModel.Factory(
+                        repository = application.checkInAnalysisRepository,
+                        wearableObservations = application.wearableObservationRepository,
+                    ),
                 )
                 InsightsScreen(
                     viewModel = insightsViewModel,
@@ -408,6 +411,7 @@ fun OrbitApp(
                 val healthConnectViewModel: HealthConnectViewModel = viewModel(
                     factory = HealthConnectViewModel.Factory(
                         biometricRepository = application.biometricRepository,
+                        wearableObservations = application.wearableObservationRepository,
                         topologyHarness = application.topologyHarness,
                     ),
                 )

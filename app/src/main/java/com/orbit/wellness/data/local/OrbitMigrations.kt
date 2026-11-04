@@ -475,6 +475,37 @@ object OrbitMigrations {
         }
     }
 
+    val MIGRATION_22_23 = object : Migration(22, 23) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `wearable_observations` (
+                    `id` TEXT NOT NULL,
+                    `metric` TEXT NOT NULL,
+                    `value` REAL NOT NULL,
+                    `unit` TEXT NOT NULL,
+                    `observedStartAt` INTEGER NOT NULL,
+                    `observedEndAt` INTEGER NOT NULL,
+                    `temporalKind` TEXT NOT NULL,
+                    `method` TEXT NOT NULL,
+                    `source` TEXT NOT NULL,
+                    `originPackage` TEXT,
+                    `sourceRecordId` TEXT,
+                    `recordingMethod` TEXT,
+                    `importedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_wearable_observations_metric_observedStartAt` ON `wearable_observations` (`metric`, `observedStartAt`)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_wearable_observations_source_sourceRecordId` ON `wearable_observations` (`source`, `sourceRecordId`)",
+            )
+        }
+    }
+
     val ALL = arrayOf(
         MIGRATION_10_11,
         MIGRATION_11_12,
@@ -488,5 +519,6 @@ object OrbitMigrations {
         MIGRATION_19_20,
         MIGRATION_20_21,
         MIGRATION_21_22,
+        MIGRATION_22_23,
     )
 }

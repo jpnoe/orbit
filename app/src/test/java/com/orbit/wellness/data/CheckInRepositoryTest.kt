@@ -45,6 +45,31 @@ class CheckInRepositoryTest {
     }
 
     @Test
+    fun migration22To23IsRegistered() {
+        val migration = OrbitMigrations.ALL.single { it.startVersion == 22 && it.endVersion == 23 }
+        assertEquals(22, migration.startVersion)
+        assertEquals(23, migration.endVersion)
+    }
+
+    @Test
+    fun exportedSchema23AddsWearableObservationsWithoutRewritingCheckIns() {
+        val current = schemaFile("23.json").readText()
+        val previous = schemaFile("22.json").readText()
+        assertTrue(current.contains("\"version\": 23"))
+        assertEquals(createSql(previous, "check_ins"), createSql(current, "check_ins"))
+        assertEquals(createSql(previous, "check_in_axis_values"), createSql(current, "check_in_axis_values"))
+        assertEquals(createSql(previous, "sleep_events"), createSql(current, "sleep_events"))
+        assertEquals(createSql(previous, "biometric_snapshots"), createSql(current, "biometric_snapshots"))
+        val wearable = createSql(current, "wearable_observations")
+        assertTrue(wearable.contains("`metric` TEXT NOT NULL"))
+        assertTrue(wearable.contains("`observedStartAt` INTEGER NOT NULL"))
+        assertTrue(wearable.contains("`observedEndAt` INTEGER NOT NULL"))
+        assertTrue(wearable.contains("`temporalKind` TEXT NOT NULL"))
+        assertTrue(wearable.contains("`sourceRecordId` TEXT"))
+        assertTrue(wearable.contains("`importedAt` INTEGER NOT NULL"))
+    }
+
+    @Test
     fun migration21To22IsRegistered() {
         val migration = OrbitMigrations.ALL.single { it.startVersion == 21 && it.endVersion == 22 }
         assertEquals(21, migration.startVersion)

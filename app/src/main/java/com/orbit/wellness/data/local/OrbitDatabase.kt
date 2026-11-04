@@ -40,8 +40,9 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
         CheckInUsageItem::class,
         CheckInMeal::class,
         CheckInMealFoodItem::class,
+        WearableObservation::class,
     ],
-    version = 22,
+    version = 23,
     exportSchema = true,
 )
 abstract class OrbitDatabase : RoomDatabase() {
@@ -68,6 +69,7 @@ abstract class OrbitDatabase : RoomDatabase() {
     abstract fun clusterMetaDao(): ClusterMetaDao
     abstract fun topologyStateDao(): TopologyStateDao
     abstract fun checkInDao(): CheckInDao
+    abstract fun wearableObservationDao(): WearableObservationDao
 
     companion object {
         private const val DB_NAME = "orbit_encrypted.db"
