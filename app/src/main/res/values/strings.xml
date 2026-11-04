@@ -192,7 +192,7 @@
     <string name="lists_empty_emotion">No custom emotions yet.</string>
     <string name="category_activity">Activity</string>
     <string name="category_emotion">Emotion</string>
-    <string name="predominant_emotion_label">Predominant emotion (optional)</string>
+    <string name="predominant_emotion_label">Emotion (optional)</string>
     <string name="add_food_title">Add Food Option</string>
     <string name="add_workout_type">+ Add</string>
     <string name="add_workout_type_title">Add workout type</string>
@@ -209,6 +209,7 @@
     <string name="history_tab_trends">Mood Trends</string>
     <string name="history_empty">Nothing logged yet. Check-ins, meals, and workouts will show up here.</string>
     <string name="history_mood">Mood %1$d</string>
+    <string name="history_log_title">Log</string>
     <string name="history_interval_wakeup">Wakeup</string>
     <string name="history_interval_range">%1$s – %2$s</string>
     <string name="history_activity_active">%1$s: TBD (in progress)</string>

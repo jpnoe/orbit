@@ -35,6 +35,7 @@ class CheckInSubmissionTest {
                 ),
                 trigger = "manual",
                 note = "  after lunch  ",
+                emotion = " calm ",
                 recordedAt = atEight,
                 localDate = localDate,
                 id = "eight",
@@ -52,6 +53,8 @@ class CheckInSubmissionTest {
         assertEquals(7, sample.moodScore)
         assertEquals("after lunch", sample.note)
         assertEquals("calm", sample.emotion)
+        assertEquals("calm", saved.record.emotion)
+        assertEquals(sample.emotion, saved.record.emotion)
         assertEquals(atEight, sample.recordedAt)
         assertEquals(MoodSample.SOURCE_CHECK_IN, sample.source)
         assertEquals(4, runBlocking { repository.getContextCategories(saved.record.id) }.size)
@@ -72,8 +75,103 @@ class CheckInSubmissionTest {
             )
         }
         assertTrue(moods.samples.isEmpty())
+        assertEquals("", saved.record.emotion)
         assertNull(committedMoodAfterSubmission(explicitScore = null, submitted = true))
         assertEquals("eight", runBlocking { repository.getContextWindow(saved.record.id) }!!.checkInId)
+    }
+
+    @Test
+    fun emotionWithoutAMoodScoreIsStoredOnlyOnTheCheckIn() {
+        val moods = RecordingMoodSamples()
+        val repository = CheckInRepository(InMemoryCheckInDao(), moodSamples = moods)
+        val saved = runBlocking {
+            repository.saveCheckIn(
+                axisValues = emptyList(),
+                trigger = "manual",
+                emotion = " Anxious ",
+                recordedAt = atEight,
+                localDate = localDate,
+                id = "eight",
+            )
+        }
+        assertEquals("Anxious", saved.record.emotion)
+        assertTrue(moods.samples.isEmpty())
+        assertNull(saved.legacyMoodSampleId)
+        assertTrue(
+            runBlocking { repository.getValuesForCheckIn(saved.record.id) }
+                .none { it.axisId == DefaultCheckInAxes.MOOD },
+        )
+    }
+
+    @Test
+    fun moodWithoutAnEmotionKeepsTheEmotionEmpty() {
+        val moods = RecordingMoodSamples()
+        val repository = CheckInRepository(InMemoryCheckInDao(), moodSamples = moods)
+        val saved = runBlocking {
+            repository.saveCheckIn(
+                axisValues = listOf(CheckInAxisInput(DefaultCheckInAxes.MOOD, 7)),
+                trigger = "manual",
+                emotion = "   ",
+                recordedAt = atEight,
+                localDate = localDate,
+                id = "eight",
+                legacyMood = LegacyCheckInMood(
+                    score = 7,
+                    note = "",
+                    emotion = "should-not-win",
+                    recordedAt = atEight,
+                ),
+            )
+        }
+        assertEquals("", saved.record.emotion)
+        assertEquals("", moods.samples.single().emotion)
+        assertEquals(7, moods.samples.single().moodScore)
+    }
+
+    @Test
+    fun moodAndEmotionStoreTheSameEmotionOnBothRecords() {
+        val moods = RecordingMoodSamples()
+        val repository = CheckInRepository(InMemoryCheckInDao(), moodSamples = moods)
+        val saved = runBlocking {
+            repository.saveCheckIn(
+                axisValues = listOf(CheckInAxisInput(DefaultCheckInAxes.MOOD, 4)),
+                trigger = "manual",
+                emotion = " Content ",
+                recordedAt = atEight,
+                localDate = localDate,
+                id = "eight",
+                legacyMood = LegacyCheckInMood(
+                    score = 4,
+                    note = "",
+                    emotion = "different",
+                    recordedAt = atEight,
+                ),
+            )
+        }
+        assertEquals("Content", saved.record.emotion)
+        assertEquals(saved.record.emotion, moods.samples.single().emotion)
+        assertEquals(4, moods.samples.single().moodScore)
+    }
+
+    @Test
+    fun neitherMoodNorEmotionLeavesBothUnset() {
+        val moods = RecordingMoodSamples()
+        val repository = CheckInRepository(InMemoryCheckInDao(), moodSamples = moods)
+        val saved = runBlocking {
+            repository.saveCheckIn(
+                axisValues = listOf(CheckInAxisInput(DefaultCheckInAxes.ENERGY, 3)),
+                trigger = "manual",
+                emotion = "",
+                recordedAt = atEight,
+                localDate = localDate,
+                id = "eight",
+            )
+        }
+        assertEquals("", saved.record.emotion)
+        assertTrue(moods.samples.isEmpty())
+        assertNull(saved.legacyMoodSampleId)
+        val values = runBlocking { repository.getValuesForCheckIn(saved.record.id) }
+        assertEquals(listOf(DefaultCheckInAxes.ENERGY), values.map { it.axisId })
     }
 
     @Test

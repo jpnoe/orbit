@@ -64,6 +64,9 @@ data class CheckInUiState(
     val latestEnergy: Int? = null,
     val latestConfidence: Int? = null,
     val latestAnxiety: Int? = null,
+    val latestRecordedAt: Long? = null,
+    val latestWindowStartAt: Long? = null,
+    val latestStartBasis: String? = null,
     val hasLatestCheckIn: Boolean = false,
     val latestLoaded: Boolean = false,
 )
@@ -130,7 +133,8 @@ class CheckInViewModel(
                 checkInRepository.observeRecentCheckIns(1),
                 checkInRepository.observeAxisValues(),
                 moodRepository.observeBySource(MoodSample.SOURCE_CHECK_IN),
-            ) { checkIns, axisValues, moods ->
+                checkInRepository.observeContextWindows(),
+            ) { checkIns, axisValues, moods, windows ->
                 val latest = checkIns.firstOrNull()
                 if (latest == null) {
                     CheckInUiState()
@@ -141,12 +145,16 @@ class CheckInViewModel(
                     val mood = moods.firstOrNull {
                         it.recordedAt == latest.recordedAt && it.localDate == latest.localDate
                     }
+                    val window = windows.firstOrNull { it.checkInId == latest.id }
                     CheckInUiState(
                         latestMood = scores[DefaultCheckInAxes.MOOD] ?: mood?.moodScore,
-                        latestEmotion = mood?.emotion.orEmpty(),
+                        latestEmotion = latest.emotion.ifBlank { mood?.emotion.orEmpty() },
                         latestEnergy = scores[DefaultCheckInAxes.ENERGY],
                         latestConfidence = scores[DefaultCheckInAxes.CONFIDENCE],
                         latestAnxiety = scores[DefaultCheckInAxes.ANXIETY],
+                        latestRecordedAt = latest.recordedAt,
+                        latestWindowStartAt = window?.windowStartAt,
+                        latestStartBasis = window?.startBasis,
                         hasLatestCheckIn = true,
                     )
                 }
@@ -158,6 +166,9 @@ class CheckInViewModel(
                         latestEnergy = latest.latestEnergy,
                         latestConfidence = latest.latestConfidence,
                         latestAnxiety = latest.latestAnxiety,
+                        latestRecordedAt = latest.latestRecordedAt,
+                        latestWindowStartAt = latest.latestWindowStartAt,
+                        latestStartBasis = latest.latestStartBasis,
                         hasLatestCheckIn = latest.hasLatestCheckIn,
                         latestLoaded = true,
                     )
@@ -389,7 +400,8 @@ class CheckInViewModel(
         val session = pending
         if (current.isSaving || session == null) return
         val inputs = explicitInputs(current)
-        if (inputs.isEmpty()) {
+        val storedEmotion = current.selectedEmotion.trim()
+        if (inputs.isEmpty() && storedEmotion.isEmpty()) {
             _messages.trySend("Set at least one scale before saving.")
             return
         }
@@ -402,7 +414,7 @@ class CheckInViewModel(
                     LegacyCheckInMood(
                         score = it.value,
                         note = current.moodNote,
-                        emotion = current.selectedEmotion,
+                        emotion = storedEmotion,
                         recordedAt = recordedAt,
                     )
                 }
@@ -410,6 +422,7 @@ class CheckInViewModel(
                     axisValues = inputs,
                     trigger = CheckInRecord.TRIGGER_MANUAL,
                     note = current.moodNote,
+                    emotion = storedEmotion,
                     recordedAt = recordedAt,
                     legacyMood = legacyMood,
                     activitySelections = session.activity.value,

@@ -41,7 +41,7 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
         CheckInMeal::class,
         CheckInMealFoodItem::class,
     ],
-    version = 21,
+    version = 22,
     exportSchema = true,
 )
 abstract class OrbitDatabase : RoomDatabase() {

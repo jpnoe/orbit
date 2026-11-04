@@ -7,11 +7,15 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 object DateUtils {
     private val localDateFormatter = DateTimeFormatter.ISO_LOCAL_DATE
     private val shortDateTimeFormatter = DateTimeFormatter.ofPattern("EEE h:mm a")
     private val datedDateTimeFormatter = DateTimeFormatter.ofPattern("EEE MMM d · h:mm a")
+    private val clockFormatter = DateTimeFormatter.ofPattern("h:mm a", Locale.US)
+    private val datePrefixFormatter = DateTimeFormatter.ofPattern("EEE MMM d", Locale.US)
+    private val datedClockFormatter = DateTimeFormatter.ofPattern("EEE MMM d, h:mm a", Locale.US)
 
     fun formatLocalDate(date: LocalDate): String = date.format(localDateFormatter)
 
@@ -27,6 +31,70 @@ object DateUtils {
         val today = LocalDate.now(zone)
         val formatter = if (date == today) shortDateTimeFormatter else datedDateTimeFormatter
         return formatter.format(zoned)
+    }
+
+    /** Weekday and date before the clock time, including for today. */
+    fun datedTimeLabel(millis: Long, zone: ZoneId = ZoneId.systemDefault()): String {
+        return Instant.ofEpochMilli(millis).atZone(zone).format(datedClockFormatter)
+    }
+
+    /**
+     * Date before the first time, and before the second time only when it falls on another date.
+     * Same day: "Wed Nov 4, 7:30 AM – 10:15 AM".
+     * Overnight: "Tue Nov 3, 11:00 PM – Wed Nov 4, 7:30 AM".
+     */
+    fun timeRangeLabel(
+        startMillis: Long,
+        endMillis: Long,
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): String {
+        val start = Instant.ofEpochMilli(startMillis).atZone(zone)
+        val end = Instant.ofEpochMilli(endMillis).atZone(zone)
+        val endText = if (start.toLocalDate() == end.toLocalDate()) {
+            end.format(clockFormatter)
+        } else {
+            end.format(datedClockFormatter)
+        }
+        return "${start.format(datedClockFormatter)} – $endText"
+    }
+
+    /**
+     * Same range shape when the start has no clock time, such as "Wed Nov 4, Wakeup – 10:15 AM".
+     */
+    fun wakeupRangeLabel(
+        startMillis: Long?,
+        endMillis: Long,
+        wakeupLabel: String,
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): String {
+        val end = Instant.ofEpochMilli(endMillis).atZone(zone)
+        val startDate = (startMillis ?: endMillis).let {
+            Instant.ofEpochMilli(it).atZone(zone).toLocalDate()
+        }
+        val endText = if (startDate == end.toLocalDate()) {
+            end.format(clockFormatter)
+        } else {
+            end.format(datedClockFormatter)
+        }
+        return "${startDate.format(datePrefixFormatter)}, $wakeupLabel – $endText"
+    }
+
+    /**
+     * History timestamp for a session: one dated time when it is still open or instantaneous,
+     * otherwise [timeRangeLabel].
+     */
+    fun entryTimeLabel(
+        startMillis: Long,
+        endMillis: Long?,
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): String {
+        if (endMillis == null) {
+            return "${datedTimeLabel(startMillis, zone)}…"
+        }
+        if (kotlin.math.abs(endMillis - startMillis) < 60_000L) {
+            return datedTimeLabel(startMillis, zone)
+        }
+        return timeRangeLabel(startMillis, endMillis, zone)
     }
 
     fun formatTime(millis: Long, zone: ZoneId = ZoneId.systemDefault()): String {

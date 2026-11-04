@@ -50,6 +50,7 @@ import com.orbit.wellness.R
 import com.orbit.wellness.data.HistoryItem
 import com.orbit.wellness.data.local.DefaultCheckInAxes
 import com.orbit.wellness.ui.checkin.checkInAxisLine
+import com.orbit.wellness.ui.checkin.checkInEmotionLine
 import com.orbit.wellness.ui.checkin.checkInMoodLine
 import com.orbit.wellness.data.local.ActivityEvent
 import com.orbit.wellness.data.local.CheckInContextStartBasis
@@ -310,11 +311,13 @@ private fun HistoryItemCard(
     val editable = item !is HistoryItem.CheckInInterval
     val timeLabel = when (item) {
         is HistoryItem.CheckInInterval -> intervalRangeLabel(item)
+        is HistoryItem.Sleep ->
+            DateUtils.timeRangeLabel(item.event.bedtime, item.event.wakeTime)
         is HistoryItem.Activity ->
-            DateUtils.sessionTimeLabel(item.event.startTime, item.event.endTime)
+            DateUtils.entryTimeLabel(item.event.startTime, item.event.endTime)
         is HistoryItem.Workout ->
-            DateUtils.sessionTimeLabel(item.event.startTime, item.event.endTime)
-        else -> DateUtils.shortDateTimeLabel(item.timestamp)
+            DateUtils.entryTimeLabel(item.event.startTime, item.event.endTime)
+        else -> DateUtils.datedTimeLabel(item.timestamp)
     }
     Card(
         modifier = Modifier
@@ -484,14 +487,6 @@ private fun HistoryItemCard(
                     )
                     Text(
                         text = stringResource(
-                            R.string.history_sleep_range,
-                            DateUtils.shortDateTimeLabel(item.event.bedtime),
-                            DateUtils.shortDateTimeLabel(item.event.wakeTime),
-                        ),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Text(
-                        text = stringResource(
                             R.string.history_sleep_quality,
                             item.event.sleepQuality,
                         ),
@@ -505,44 +500,45 @@ private fun HistoryItemCard(
 
 @Composable
 private fun intervalRangeLabel(item: HistoryItem.CheckInInterval): String {
-    val start = if (
-        item.startBasis == CheckInContextStartBasis.DAY_START ||
-        item.windowStartAt == null
-    ) {
-        stringResource(R.string.history_interval_wakeup)
+    val start = item.windowStartAt
+    return if (item.startBasis == CheckInContextStartBasis.DAY_START || start == null) {
+        DateUtils.wakeupRangeLabel(
+            startMillis = start,
+            endMillis = item.recordedAt,
+            wakeupLabel = stringResource(R.string.history_interval_wakeup),
+        )
     } else {
-        DateUtils.formatTime(item.windowStartAt)
-    }
-    val end = DateUtils.formatTime(item.recordedAt)
-    val range = stringResource(R.string.history_interval_range, start, end)
-    val zone = java.time.ZoneId.systemDefault()
-    val day = java.time.Instant.ofEpochMilli(item.recordedAt).atZone(zone).toLocalDate()
-    return if (day == java.time.LocalDate.now(zone)) {
-        range
-    } else {
-        val date = day.format(java.time.format.DateTimeFormatter.ofPattern("EEE MMM d"))
-        "$date · $range"
+        DateUtils.timeRangeLabel(start, item.recordedAt)
     }
 }
 
 @Composable
 private fun CheckInIntervalBody(item: HistoryItem.CheckInInterval) {
     val missing = stringResource(R.string.check_in_not_set)
+    val detail = MaterialTheme.typography.bodyMedium
     Text(
-        text = checkInMoodLine(item.moodScore, item.emotion, missing),
+        text = stringResource(R.string.history_log_title),
         style = MaterialTheme.typography.titleMedium,
     )
     Text(
+        text = checkInEmotionLine(item.emotion, missing),
+        style = detail,
+    )
+    Text(
+        text = checkInMoodLine(item.moodScore, missing),
+        style = detail,
+    )
+    Text(
         text = checkInAxisLine(DefaultCheckInAxes.ENERGY, item.energyScore, missing),
-        style = MaterialTheme.typography.bodyLarge,
+        style = detail,
     )
     Text(
         text = checkInAxisLine(DefaultCheckInAxes.CONFIDENCE, item.confidenceScore, missing),
-        style = MaterialTheme.typography.bodyLarge,
+        style = detail,
     )
     Text(
         text = checkInAxisLine(DefaultCheckInAxes.ANXIETY, item.anxietyScore, missing),
-        style = MaterialTheme.typography.bodyLarge,
+        style = detail,
     )
     if (item.note.isNotBlank()) {
         Text(text = item.note, style = MaterialTheme.typography.bodyMedium)

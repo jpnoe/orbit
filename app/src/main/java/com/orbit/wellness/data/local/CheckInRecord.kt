@@ -19,6 +19,11 @@ data class CheckInRecord(
     val recordedAt: Long,
     val trigger: String,
     val note: String = "",
+    /**
+     * Selected emotion snapshot. Independent of the numeric mood score.
+     * Empty when none was selected. Not a foreign key.
+     */
+    val emotion: String = "",
 ) {
     companion object {
         const val TRIGGER_WAKE = "wake"

@@ -50,6 +50,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.orbit.wellness.R
 import com.orbit.wellness.data.CheckInDrafts
 import com.orbit.wellness.data.local.CheckInAxis
+import com.orbit.wellness.data.local.CheckInContextStartBasis
 import com.orbit.wellness.data.local.DefaultCheckInAxes
 import com.orbit.wellness.ui.util.CollectSavedFeedback
 import com.orbit.wellness.ui.util.InlineLoading
@@ -143,29 +144,7 @@ fun CheckInScreen(
             }
 
             if (uiState.hasLatestCheckIn) {
-                val missing = stringResource(R.string.check_in_not_set)
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = stringResource(R.string.latest_check_in),
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        text = checkInMoodLine(uiState.latestMood, uiState.latestEmotion, missing),
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                    Text(
-                        text = checkInAxisLine(DefaultCheckInAxes.ENERGY, uiState.latestEnergy, missing),
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                    Text(
-                        text = checkInAxisLine(DefaultCheckInAxes.CONFIDENCE, uiState.latestConfidence, missing),
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                    Text(
-                        text = checkInAxisLine(DefaultCheckInAxes.ANXIETY, uiState.latestAnxiety, missing),
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                }
+                LatestCheckInCard(uiState)
             }
         }
     }
@@ -263,28 +242,26 @@ fun CheckInLogScreen(
             )
         }
 
-        if (uiState.enabledAxes.any { it.id == DefaultCheckInAxes.MOOD }) {
-            Text(
-                text = stringResource(R.string.predominant_emotion_label),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                uiState.emotionOptions.forEach { option ->
-                    FilterChip(
-                        selected = uiState.selectedEmotion == option.name,
-                        onClick = { viewModel.onEmotionSelected(option.name) },
-                        label = { Text(option.name) },
-                    )
-                }
+        Text(
+            text = stringResource(R.string.predominant_emotion_label),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            uiState.emotionOptions.forEach { option ->
                 FilterChip(
-                    selected = false,
-                    onClick = viewModel::openAddEmotionDialog,
-                    label = { Text(stringResource(R.string.add_activity)) },
+                    selected = uiState.selectedEmotion == option.name,
+                    onClick = { viewModel.onEmotionSelected(option.name) },
+                    label = { Text(option.name) },
                 )
             }
+            FilterChip(
+                selected = false,
+                onClick = viewModel::openAddEmotionDialog,
+                label = { Text(stringResource(R.string.add_activity)) },
+            )
         }
 
         OutlinedTextField(
@@ -384,6 +361,79 @@ private fun DiscardEntryDialog(
 }
 
 @Composable
+private fun LatestCheckInCard(state: CheckInUiState) {
+    val missing = stringResource(R.string.check_in_not_set)
+    val detail = MaterialTheme.typography.bodyMedium
+    val detailColor = MaterialTheme.colorScheme.onSecondaryContainer
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+        ),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            val range = latestCheckInRangeLabel(state)
+            if (range.isNotEmpty()) {
+                Text(
+                    text = range,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = detailColor,
+                )
+            }
+            Text(
+                text = stringResource(R.string.latest_check_in),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = checkInEmotionLine(state.latestEmotion, missing),
+                style = detail,
+                color = detailColor,
+            )
+            Text(
+                text = checkInMoodLine(state.latestMood, missing),
+                style = detail,
+                color = detailColor,
+            )
+            Text(
+                text = checkInAxisLine(DefaultCheckInAxes.ENERGY, state.latestEnergy, missing),
+                style = detail,
+                color = detailColor,
+            )
+            Text(
+                text = checkInAxisLine(DefaultCheckInAxes.CONFIDENCE, state.latestConfidence, missing),
+                style = detail,
+                color = detailColor,
+            )
+            Text(
+                text = checkInAxisLine(DefaultCheckInAxes.ANXIETY, state.latestAnxiety, missing),
+                style = detail,
+                color = detailColor,
+            )
+        }
+    }
+}
+
+@Composable
+private fun latestCheckInRangeLabel(state: CheckInUiState): String {
+    val end = state.latestRecordedAt ?: return ""
+    val start = state.latestWindowStartAt
+    return if (state.latestStartBasis == CheckInContextStartBasis.DAY_START || start == null) {
+        DateUtils.wakeupRangeLabel(
+            startMillis = start,
+            endMillis = end,
+            wakeupLabel = stringResource(R.string.history_interval_wakeup),
+        )
+    } else {
+        DateUtils.timeRangeLabel(start, end)
+    }
+}
+
+@Composable
 private fun SleepSummaryCard(
     alreadyLogged: Boolean,
     expanded: Boolean,
@@ -417,16 +467,16 @@ private fun SleepSummaryCard(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = stringResource(R.string.sleep_logged_title),
+                            text = DateUtils.timeRangeLabel(bedtimeMillis, wakeTimeMillis),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                        Text(
+                            text = stringResource(R.string.sleep_heading),
                             style = MaterialTheme.typography.titleMedium,
                         )
                         Text(
-                            text = stringResource(
-                                R.string.sleep_logged_summary,
-                                DateUtils.shortDateTimeLabel(bedtimeMillis),
-                                DateUtils.shortDateTimeLabel(wakeTimeMillis),
-                                qualityInt,
-                            ),
+                            text = stringResource(R.string.history_sleep_quality, qualityInt),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSecondaryContainer,
                         )

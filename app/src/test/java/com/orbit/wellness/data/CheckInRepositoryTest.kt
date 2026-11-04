@@ -45,6 +45,28 @@ class CheckInRepositoryTest {
     }
 
     @Test
+    fun migration21To22IsRegistered() {
+        val migration = OrbitMigrations.ALL.single { it.startVersion == 21 && it.endVersion == 22 }
+        assertEquals(21, migration.startVersion)
+        assertEquals(22, migration.endVersion)
+    }
+
+    @Test
+    fun exportedSchema22AddsCheckInEmotionWithoutRewritingExistingRows() {
+        val current = schemaFile("22.json").readText()
+        val previous = schemaFile("21.json").readText()
+        assertTrue(current.contains("\"version\": 22"))
+        assertEquals(createSql(previous, "mood_samples"), createSql(current, "mood_samples"))
+        assertEquals(createSql(previous, "check_in_axis_values"), createSql(current, "check_in_axis_values"))
+        assertEquals(createSql(previous, "check_in_context_windows"), createSql(current, "check_in_context_windows"))
+        val previousCheckIns = createSql(previous, "check_ins")
+        val checkIns = createSql(current, "check_ins")
+        assertTrue(!previousCheckIns.contains("`emotion`"))
+        assertTrue(checkIns.contains("`emotion` TEXT NOT NULL"))
+        assertTrue(checkIns.startsWith(previousCheckIns.removeSuffix("PRIMARY KEY(`id`))")))
+    }
+
+    @Test
     fun migration20To21IsRegistered() {
         val migration = OrbitMigrations.ALL.single { it.startVersion == 20 && it.endVersion == 21 }
         assertEquals(20, migration.startVersion)

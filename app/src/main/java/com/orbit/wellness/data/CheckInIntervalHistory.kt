@@ -57,7 +57,7 @@ object CheckInIntervalHistory {
                 energyScore = scores[DefaultCheckInAxes.ENERGY],
                 confidenceScore = scores[DefaultCheckInAxes.CONFIDENCE],
                 anxietyScore = scores[DefaultCheckInAxes.ANXIETY],
-                emotion = mood?.emotion.orEmpty(),
+                emotion = checkIn.emotion.ifBlank { mood?.emotion.orEmpty() },
                 note = mood?.note?.ifBlank { checkIn.note } ?: checkIn.note,
                 activities = activitiesById[checkIn.id].orEmpty().map { it.activityName },
                 workouts = workoutsById[checkIn.id].orEmpty().map { item ->

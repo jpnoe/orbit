@@ -42,6 +42,8 @@ class CheckInRepository(
 
     fun observeAxisValues(): Flow<List<CheckInAxisValue>> = dao.observeAxisValues()
 
+    fun observeContextWindows(): Flow<List<CheckInContextWindow>> = dao.observeContextWindows()
+
     suspend fun getLatestCheckIn(): CheckInRecord? = dao.getLatest()
 
     fun observeContextWindow(checkInId: String): Flow<CheckInContextWindow?> =
@@ -90,6 +92,7 @@ class CheckInRepository(
         axisValues: List<CheckInAxisInput>,
         trigger: String,
         note: String = "",
+        emotion: String = "",
         recordedAt: Long = System.currentTimeMillis(),
         localDate: String = DateUtils.formatLocalDate(DateUtils.localDateOf(recordedAt)),
         id: String = UUID.randomUUID().toString(),
@@ -100,7 +103,6 @@ class CheckInRepository(
         mealSelections: List<CheckInMealSelection>? = null,
         completedAt: Long? = null,
     ): SavedCheckIn {
-        CheckInValidator.validate(axisValues)
         activitySelections?.let { CheckInActivitySelections.validate(it, contextWindowExists = true) }
         workoutSelections?.let { CheckInWorkoutSelections.validate(it, contextWindowExists = true) }
         usageSelections?.let { CheckInUsageSelections.validate(it, contextWindowExists = true) }
@@ -109,12 +111,21 @@ class CheckInRepository(
         require(normalizedTrigger.isNotBlank()) {
             "Check-in trigger must not be blank"
         }
+        val storedEmotion = emotion.trim()
+        if (axisValues.isEmpty()) {
+            require(storedEmotion.isNotEmpty()) {
+                "A check-in needs an axis value or an emotion"
+            }
+        } else {
+            CheckInValidator.validate(axisValues)
+        }
         val record = CheckInRecord(
             id = id,
             localDate = localDate,
             recordedAt = recordedAt,
             trigger = normalizedTrigger,
             note = note.trim(),
+            emotion = storedEmotion,
         )
         val rows = axisValues.map { input ->
             CheckInAxisValue(
@@ -144,7 +155,7 @@ class CheckInRepository(
             windowEndAt = boundary.windowEndAt,
             startBasis = boundary.startBasis,
         )
-        val moodSample = legacyMood?.toSample(record.localDate)
+        val moodSample = legacyMood?.toSample(record.localDate, storedEmotion)
         transaction.run {
             dao.insertCheckInWithContext(
                 record = record,
@@ -375,11 +386,11 @@ class CheckInRepository(
     }
 }
 
-private fun LegacyCheckInMood.toSample(localDate: String) = MoodSample(
+private fun LegacyCheckInMood.toSample(localDate: String, emotion: String) = MoodSample(
     localDate = localDate,
     moodScore = score.coerceIn(0, 10),
     note = note.trim(),
-    emotion = emotion.trim(),
+    emotion = emotion,
     recordedAt = recordedAt,
     source = source,
 )

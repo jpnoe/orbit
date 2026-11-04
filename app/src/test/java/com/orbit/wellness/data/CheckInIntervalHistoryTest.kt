@@ -200,6 +200,63 @@ class CheckInIntervalHistoryTest {
         assertNull(interval.anxietyScore)
     }
 
+    @Test
+    fun emotionOnlyCheckInKeepsTheNativeEmotionWithoutAMoodScore() {
+        val interval = CheckInIntervalHistory.build(
+            checkIns = listOf(checkIn("only", firstAt).copy(emotion = "Anxious")),
+            windows = listOf(window("only", CheckInContextStartBasis.WAKE_TIME, wake)),
+            activities = emptyList(),
+            workouts = emptyList(),
+            usage = emptyList(),
+            meals = emptyList(),
+            foods = emptyList(),
+            moods = emptyList(),
+        ).single()
+        assertNull(interval.moodScore)
+        assertEquals("Anxious", interval.emotion)
+        val nativeWins = CheckInIntervalHistory.build(
+            checkIns = listOf(checkIn("native", firstAt).copy(emotion = "Anxious")),
+            windows = listOf(window("native", CheckInContextStartBasis.WAKE_TIME, wake)),
+            activities = emptyList(),
+            workouts = emptyList(),
+            usage = emptyList(),
+            meals = emptyList(),
+            foods = emptyList(),
+            moods = listOf(
+                MoodSample(
+                    id = "older",
+                    localDate = day,
+                    moodScore = 6,
+                    emotion = "Calm",
+                    recordedAt = firstAt,
+                    source = MoodSample.SOURCE_CHECK_IN,
+                ),
+            ),
+        ).single()
+        assertEquals("Anxious", nativeWins.emotion)
+        val legacy = CheckInIntervalHistory.build(
+            checkIns = listOf(checkIn("old", firstAt)),
+            windows = listOf(window("old", CheckInContextStartBasis.DAY_START, 0L)),
+            activities = emptyList(),
+            workouts = emptyList(),
+            usage = emptyList(),
+            meals = emptyList(),
+            foods = emptyList(),
+            moods = listOf(
+                MoodSample(
+                    id = "mood-old",
+                    localDate = day,
+                    moodScore = 4,
+                    emotion = "Calm",
+                    recordedAt = firstAt,
+                    source = MoodSample.SOURCE_CHECK_IN,
+                ),
+            ),
+        ).single()
+        assertEquals(4, legacy.moodScore)
+        assertEquals("Calm", legacy.emotion)
+    }
+
     private fun checkIn(id: String, at: Long) = CheckInRecord(
         id = id,
         localDate = day,
