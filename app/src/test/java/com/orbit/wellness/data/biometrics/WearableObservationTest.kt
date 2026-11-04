@@ -6,18 +6,21 @@ import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.metadata.Metadata
 import com.orbit.wellness.data.WearableObservationRepository
 import com.orbit.wellness.data.local.SleepEvent
+import com.orbit.wellness.data.local.RECENT_HEALTH_LIMIT
 import com.orbit.wellness.data.local.WearableMethod
 import com.orbit.wellness.data.local.WearableMetric
 import com.orbit.wellness.data.local.WearableObservation
 import com.orbit.wellness.data.local.WearableObservationDao
 import com.orbit.wellness.data.local.WearableTemporalKind
 import com.orbit.wellness.data.local.aggregatedWindows
+import com.orbit.wellness.data.local.mostRecent
 import com.orbit.wellness.data.wearableCoverage
 import com.orbit.wellness.domain.checkin.TemporalWindowProjector
 import com.orbit.wellness.ui.wearable.wearableMetricLabelRes
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -188,16 +191,62 @@ class WearableObservationTest {
     }
 
     @Test
-    fun repeatedSourceRecordIdsReplaceTheSameRow() = runBlocking {
+    fun sameRecordIdReplacesValueAndMeasurementTime() = runBlocking {
         val dao = MemoryWearableDao()
         val first = point(at = 1_500, importedAt = 2_000, recordId = "hc-1", value = 58.0)
-        val corrected = point(at = 1_500, importedAt = 3_000, recordId = "hc-1", value = 60.0)
+        val corrected = point(at = 1_800, importedAt = 3_000, recordId = "hc-1", value = 60.0)
         assertEquals(first.id, corrected.id)
         dao.upsertAll(listOf(first))
         dao.upsertAll(listOf(corrected))
         assertEquals(1, dao.rows.size)
-        assertEquals(60.0, dao.rows.getValue(first.id).value, 0.0)
-        assertEquals(3_000L, dao.rows.getValue(first.id).importedAt)
+        val stored = dao.rows.getValue(first.id)
+        assertEquals(60.0, stored.value, 0.0)
+        assertEquals(1_800L, stored.observedStartAt)
+        assertEquals(3_000L, stored.importedAt)
+    }
+
+    @Test
+    fun differentRecordIdsStayDistinct() {
+        val first = point(at = 1_500, importedAt = 2_000, recordId = "hc-1")
+        val second = point(at = 1_500, importedAt = 2_000, recordId = "hc-2")
+        assertNotEquals(first.id, second.id)
+    }
+
+    @Test
+    fun blankRecordIdUsesTheMeasurementWindow() {
+        val first = point(at = 1_000, importedAt = 2_000, recordId = " ", value = 50.0)
+        val moved = point(at = 1_500, importedAt = 2_000, recordId = "", value = 50.0)
+        val sameWindow = point(at = 1_000, importedAt = 9_000, recordId = "", value = 51.0)
+        assertNotEquals(first.id, moved.id)
+        assertEquals(first.id, sameWindow.id)
+        assertNull(first.sourceRecordId)
+    }
+
+    @Test
+    fun heartRateSamplesFromOneParentStayDistinctAndReimportReplaces() = runBlocking {
+        val dao = MemoryWearableDao()
+        val earlier = heartSample(at = 1_000, parentId = "hr-parent", value = 70.0, importedAt = 2_000)
+        val later = heartSample(at = 1_400, parentId = "hr-parent", value = 80.0, importedAt = 2_000)
+        val reimported = heartSample(at = 1_000, parentId = "hr-parent", value = 72.0, importedAt = 3_000)
+        assertNotEquals(earlier.id, later.id)
+        assertEquals(earlier.id, reimported.id)
+        dao.upsertAll(listOf(earlier, later))
+        dao.upsertAll(listOf(reimported))
+        assertEquals(2, dao.rows.size)
+        assertEquals(72.0, dao.rows.getValue(earlier.id).value, 0.0)
+        assertEquals(3_000L, dao.rows.getValue(earlier.id).importedAt)
+        assertEquals(80.0, dao.rows.getValue(later.id).value, 0.0)
+    }
+
+    @Test
+    fun aggregateWindowsStayDistinct() {
+        val morning = stepsWindow(start = 1_000, end = 2_000, value = 4_000.0)
+        val afternoon = stepsWindow(start = 1_000, end = 3_000, value = 9_000.0)
+        assertNotEquals(morning.id, afternoon.id)
+        assertEquals(
+            morning.id,
+            stepsWindow(start = 1_000, end = 2_000, value = 4_100.0).id,
+        )
     }
 
     @Test
@@ -235,25 +284,15 @@ class WearableObservationTest {
     }
 
     @Test
-    fun syncDoesNotRunTheEncoderOrTopology() = runBlocking {
+    fun syncStoresObservationsWithoutEncoding() = runBlocking {
         val dao = MemoryWearableDao()
         val observation = point(at = 1_500, importedAt = 2_000, recordId = "hc-1")
         val repository = BiometricRepository(
             reader = FakeReader(WearableReadResult(listOf(observation), emptyList())),
             wearableObservationDao = dao,
-            dormantEncoder = null,
-            dormantTopology = null,
         )
         val result = repository.sync()
         assertNull(result.error)
-        assertEquals(1, dao.rows.size)
-        var encodeFailed = false
-        try {
-            repository.encodeOnly()
-        } catch (_: IllegalStateException) {
-            encodeFailed = true
-        }
-        assertTrue(encodeFailed)
         assertEquals(1, dao.rows.size)
     }
 
@@ -281,7 +320,8 @@ class WearableObservationTest {
         assertTrue(strings.contains(">Resting heart rate<"))
         assertTrue(strings.contains(">Heart-rate average<"))
         assertTrue(strings.contains(">Heart-rate sample<"))
-        assertTrue(strings.contains("These counts describe imported measurements."))
+        assertTrue(strings.contains("These counts describe the selected summaries that were imported."))
+        assertTrue(strings.contains("Recent observations"))
         val wearableCopy = strings.substringAfter("insights_wearable_heading")
             .substringBefore("health_connect_tab")
         assertTrue(!wearableCopy.contains("correlat", ignoreCase = true))
@@ -301,6 +341,31 @@ class WearableObservationTest {
         assertEquals(1, dao.rows.size)
     }
 
+    @Test
+    fun recentObserverIsBoundedWhileAnalysisKeepsTheFullHistory() = runBlocking {
+        val dao = MemoryWearableDao()
+        val repository = WearableObservationRepository(dao)
+        val observations = (0 until RECENT_HEALTH_LIMIT + 10).map { index ->
+            point(
+                at = 1_000L + (index % 7),
+                importedAt = 5_000L + index,
+                recordId = "row-$index",
+                value = index.toDouble(),
+            )
+        }
+        dao.upsertAll(observations)
+        val full = repository.observe().first()
+        val recent = repository.observeRecent().first()
+        val expected = observations.mostRecent()
+        assertEquals(observations.size, full.size)
+        assertEquals(RECENT_HEALTH_LIMIT, recent.size)
+        assertEquals(expected.map { it.id }, recent.map { it.id })
+        assertEquals(expected.map { it.id }, observations.mostRecent().map { it.id })
+        val omitted = full.map { it.id }.toSet() - recent.map { it.id }.toSet()
+        assertEquals(10, omitted.size)
+        assertTrue(omitted.all { id -> full.any { it.id == id } })
+    }
+
     private fun point(
         at: Long,
         importedAt: Long,
@@ -317,6 +382,38 @@ class WearableObservationTest {
             method = WearableMethod.RESTING_HEART_RATE_RECORD,
             sourceRecordId = recordId,
             importedAt = importedAt,
+        )
+    }
+
+    private fun heartSample(
+        at: Long,
+        parentId: String,
+        value: Double,
+        importedAt: Long,
+    ): WearableObservation {
+        return WearableObservation.create(
+            metric = WearableMetric.HEART_RATE_SAMPLE,
+            value = value,
+            unit = "bpm",
+            observedStartAt = at,
+            observedEndAt = at,
+            temporalKind = WearableTemporalKind.POINT,
+            method = WearableMethod.HEART_RATE_SAMPLE,
+            sourceRecordId = parentId,
+            importedAt = importedAt,
+        )
+    }
+
+    private fun stepsWindow(start: Long, end: Long, value: Double): WearableObservation {
+        return WearableObservation.create(
+            metric = WearableMetric.STEPS,
+            value = value,
+            unit = "count",
+            observedStartAt = start,
+            observedEndAt = end,
+            temporalKind = WearableTemporalKind.AGGREGATED_WINDOW,
+            method = WearableMethod.AGGREGATE_TOTAL,
+            importedAt = end,
         )
     }
 
@@ -351,6 +448,10 @@ class WearableObservationTest {
         }
 
         override fun observeAll(): Flow<List<WearableObservation>> = published
+
+        override fun observeRecent(limit: Int): Flow<List<WearableObservation>> {
+            return published.map { observations -> observations.mostRecent(limit) }
+        }
     }
 
     private class FakeReader(

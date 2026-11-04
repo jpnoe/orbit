@@ -8,7 +8,7 @@ import kotlinx.coroutines.CancellationException
 
 /**
  * Optional legacy mood written in the same Room transaction as a configurable check-in.
- * [source] stays [MoodSample.SOURCE_CHECK_IN] so existing history and [com.orbit.wellness.domain.StateEncoder] keep reading it.
+ * [source] stays [MoodSample.SOURCE_CHECK_IN] so history can tell a check-in mood from an older mood log.
  */
 data class LegacyCheckInMood(
     val score: Int,

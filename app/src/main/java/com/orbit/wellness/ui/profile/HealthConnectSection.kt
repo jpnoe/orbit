@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -24,7 +23,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
-import com.orbit.wellness.BuildConfig
 import com.orbit.wellness.R
 import com.orbit.wellness.data.biometrics.HealthConnectPermissions
 import com.orbit.wellness.data.local.WearableObservation
@@ -148,35 +146,6 @@ fun HealthConnectSection(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-
-            OutlinedButton(
-                onClick = viewModel::encodeOnly,
-                enabled = !uiState.isBusy,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(stringResource(R.string.health_connect_encode_only))
-            }
-
-            Text(
-                text = stringResource(R.string.health_connect_encode_help),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        if (BuildConfig.DEBUG) {
-            OutlinedButton(
-                onClick = viewModel::seedSyntheticTopology,
-                enabled = !uiState.isBusy,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(stringResource(R.string.health_connect_seed_synthetic))
-            }
-            Text(
-                text = stringResource(R.string.health_connect_seed_synthetic_help),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
 
         if (uiState.isBusy) {
@@ -218,20 +187,6 @@ fun HealthConnectSection(
                     text = "• $note",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
-        if (uiState.axisRows.isNotEmpty()) {
-            Text(
-                text = stringResource(R.string.health_connect_vector_title),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(top = 8.dp),
-            )
-            uiState.axisRows.forEach { (id, value) ->
-                Text(
-                    text = "$id = ${String.format("%.3f", value)}",
-                    style = MaterialTheme.typography.bodySmall,
                 )
             }
         }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.records.HeartRateRecord
+import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.records.RestingHeartRateRecord
 import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.StepsRecord
@@ -139,12 +140,13 @@ class HealthConnectReader(
         }
 
         return try {
-            val records = client.readRecords(
+            val records = readAllRecords(
+                client,
                 ReadRecordsRequest(
                     recordType = StepsRecord::class,
                     timeRangeFilter = TimeRangeFilter.between(start, end),
                 ),
-            ).records
+            )
             if (records.isEmpty()) {
                 notes += "Steps: no records in Health Connect for today."
                 emptyList()
@@ -176,12 +178,13 @@ class HealthConnectReader(
         notes: MutableList<String>,
     ): List<WearableObservation> {
         try {
-            val resting = client.readRecords(
+            val resting = readAllRecords(
+                client,
                 ReadRecordsRequest(
                     recordType = RestingHeartRateRecord::class,
                     timeRangeFilter = TimeRangeFilter.between(start, end),
                 ),
-            ).records
+            )
             val latest = resting.maxByOrNull { it.time }
             if (latest != null) {
                 return listOf(restingHeartRate(latest, importedAt = end))
@@ -221,12 +224,13 @@ class HealthConnectReader(
         }
 
         try {
-            val records = client.readRecords(
+            val records = readAllRecords(
+                client,
                 ReadRecordsRequest(
                     recordType = HeartRateRecord::class,
                     timeRangeFilter = TimeRangeFilter.between(averageStart, end),
                 ),
-            ).records
+            )
             val latest = records
                 .flatMap { record -> record.samples.map { sample -> record to sample } }
                 .maxByOrNull { (_, sample) -> sample.time }
@@ -249,12 +253,13 @@ class HealthConnectReader(
         notes: MutableList<String>,
     ): WearableObservation? {
         return try {
-            val sessions = client.readRecords(
+            val sessions = readAllRecords(
+                client,
                 ReadRecordsRequest(
                     recordType = SleepSessionRecord::class,
                     timeRangeFilter = TimeRangeFilter.between(start, end),
                 ),
-            ).records
+            )
             val session = sessions.maxByOrNull { it.endTime } ?: return null
             if (!session.endTime.isAfter(session.startTime)) {
                 notes += "Sleep: skipped a session with no positive duration."
@@ -265,6 +270,28 @@ class HealthConnectReader(
             Log.w(TAG, "Sleep session read failed", e)
             notes += "Sleep: read failed (${e.message ?: "error"})."
             null
+        }
+    }
+
+    private suspend fun <T : Record> readAllRecords(
+        client: HealthConnectClient,
+        request: ReadRecordsRequest<T>,
+    ): List<T> {
+        return readAllPages { token ->
+            val pageRequest = if (token.isNullOrEmpty()) {
+                request
+            } else {
+                ReadRecordsRequest(
+                    recordType = request.recordType,
+                    timeRangeFilter = request.timeRangeFilter,
+                    dataOriginFilter = request.dataOriginFilter,
+                    ascendingOrder = request.ascendingOrder,
+                    pageSize = request.pageSize,
+                    pageToken = token,
+                )
+            }
+            val response = client.readRecords(pageRequest)
+            RecordPage(response.records, response.pageToken)
         }
     }
 

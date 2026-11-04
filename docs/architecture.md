@@ -16,7 +16,7 @@ The context overview is where activity, workout, usage, and diet are edited befo
 
 Detailed `ActivityEvent`, `WorkoutEvent`, meal, sleep, and usage logs remain a separate logging path. A contextual workout is an approximate report inside the check-in interval. A `WorkoutEvent` is an exact log with start, end, mood, and the other session fields. A contextual usage item says something was used during the interval. A `SubstanceUseEvent` claims a particular time and keeps its older event fields. A contextual meal is an approximate report of an eating occasion inside the check-in interval. A `MealEvent` is a separate log with an exact timestamp, weights, and optional nutrient data. Replacing contextual items does not modify `ActivityEvent`, `WorkoutEvent`, `SubstanceUseEvent`, or `MealEvent` history, and older events are not copied into the contextual tables. The detailed activity, workout, use, and diet screens still have their own event fields. The detailed diet screen still has barcode lookup, food search, and nutrient calculations.
 
-The fixed ten-axis state vector is dormant. `FeatureAxes`, `StateEncoder`, `StateVectorSnapshot`, neighbor search, grouping, and neighborhood suggestions still use that old representation. They are not a compatibility target for configurable check-ins, context windows, the check-in analysis projection, or wearable observations. Health Connect sync does not write to them.
+The fixed ten-axis state vector is obsolete. `FeatureAxes`, `StateEncoder`, `StateVectorSnapshot`, `TopologyRepository`, `HnswIndex`, and `TopologyHarness` remain in the source tree, and their Room tables remain in schema 23, but the application does not construct them, warm them, schedule them, or show a control that writes them. They are not a compatibility target for check-ins or wearable observations.
 
 ## Check-in analysis representation
 
@@ -42,7 +42,9 @@ Disagreeing rows are not collapsed. `AnalysisIssue` records duplicate axis value
 
 ## State representation
 
-`domain/state/StateEncoder.kt` reads Room observations and the latest biometric snapshot, then persists a `StateVectorSnapshot`. `FeatureAxes` fixes the following ten dimensions.
+The ten-axis encoder below is unused at runtime. Nothing in `OrbitApplication`, sync, or the Health screen calls it. The description is kept so a later deletion pass can see what the dormant files do.
+
+`domain/state/StateEncoder.kt` can read Room observations and the latest biometric snapshot, then persist a `StateVectorSnapshot`. `FeatureAxes` fixes the following ten dimensions.
 
 | Axis | Current encoding |
 | --- | --- |
@@ -63,13 +65,15 @@ Food identities, nutrient composition, specific activity categories, medication 
 
 ## Encoding and analysis orchestration
 
-`BiometricRepository.sync()` reads Health Connect and upserts `WearableObservation` rows. It does not encode a state vector, ingest topology, or write `BiometricSnapshot`. `encodeOnly()` remains an explicit action for the dormant ten-axis path and is not part of sync success. `BiometricSyncWorker` calls `sync()` about once an hour. Android schedules that work; the interval is not an exact sampling-time guarantee. `TopologyCompactWorker` still requests weekly compaction of the dormant topology while charging and idle.
+`BiometricRepository.sync()` reads Health Connect and upserts `WearableObservation` rows. It does not encode a state vector, ingest topology, or write `BiometricSnapshot`. `BiometricSyncWorker` calls `sync()` about once an hour. Android schedules that work; the interval is not an exact sampling-time guarantee. Startup cancels any previously enqueued `TopologyCompactWorker`. If a leftover job still runs, its `doWork` returns without compacting or writing.
+
+A sync imports selected summaries inside fixed lookbacks, not an exhaustive sensor stream. Steps are the cumulative total for local midnight through the sync instant. Heart rate is the latest `RestingHeartRateRecord` in seven days when one exists; otherwise one six-hour heart-rate average, or, if that average is absent, the latest heart-rate sample in those six hours. Sleep is the latest session in 48 hours. Raw record reads continue through `pageToken` until it is null or empty, and they stay inside those same time ranges. Health Connect deletions are not reconciled. A record removed upstream can remain locally until a later change-token pass. The Health screen says this is a selected summary and labels its list Recent observations.
 
 A wearable observation keeps its metric, value, unit, measurement start and end, temporal kind, measurement or aggregation method, Health Connect as the import source, the originating app package when a record provides it, the Health Connect record id when one exists, the recording method when a record provides it, and the import time. A missing permission or an unavailable metric is the absence of a row. A genuine numeric zero is stored. A heart-rate average and an individual heart-rate sample are not stored as resting heart rate. Steps from an aggregate call are one cumulative window. Overlapping cumulative windows are separate rows and are not added together. A confirmed `SleepEvent` and a wearable sleep observation stay in different tables.
 
-Health Connect does not return a record id for an aggregate. The steps window is the requested range, local midnight through the read instant, and the six-hour heart-rate average uses the six hours ending at that same read instant. A later sync has a later end and is therefore a different row. `HeartRateRecord.Sample` has a time and a rate but no sample id. Orbit stores the parent record id and uses the sample time as the measurement instant; that pair is not a native sample id. Sleep stages are not copied. The session start, end, and duration are. Records also carry a zone offset; the stored times are the absolute instants.
+Identity depends on what Health Connect actually provides. A record-backed observation uses source, metric, method, and the stable record id, so a corrected value or measurement time replaces that row. A blank record id is absent and the row is identified by its measurement window instead. A heart-rate sample has no sample id. Its key is the parent record id plus the sample timestamp, so samples from one parent stay distinct and reimporting the same sample replaces it. An aggregate has no record id. Its key is source, metric, method, and the exact requested start and end, so a later sync instant is a different steps or average row. Sleep stages are not copied. The session start, end, and duration are. Records also carry a zone offset; the stored times are the absolute instants.
 
-`WearableObservationRepository` exposes those rows to Insights. Coverage counts are derived in memory and are not written back. Insights lists whether observations exist, how many of each metric were imported, the earliest and latest measurement times, and the latest import time. It does not correlate them with check-ins or make a recommendation.
+`WearableObservationRepository.observe()` is the full local history used by Insights and later analysis. `observeRecent()` is the newest 50 by measurement time, then import time, then id, and the Health screen uses only that bounded flow. Neither path deletes stored rows. Coverage counts are derived in memory and are not written back. Insights lists whether observations exist, how many of each metric were imported, the earliest and latest measurement times, and the latest import time. It does not correlate them with check-ins or make a recommendation.
 
 ## Neighbors and grouping
 
@@ -83,7 +87,7 @@ Health Connect does not return a record id for an aggregate. The steps window is
 
 `NeighborhoodSuggester` first searches sufficiently large groups for a target with higher mood, then falls back to up to three higher-mood neighbors. It returns feature deltas, or a learning message when appropriate. Mood and mood-change axes are excluded from the returned deltas.
 
-The only current call to `suggestBetterNeighborhood()` outside the repository is the synthetic debug harness. The algorithm exists; deployment of its outputs as user-facing recommendations remains unfinished. No causal or clinical efficacy claim follows from synthetic selection tests.
+`suggestBetterNeighborhood()` is not called from application startup, sync, or the Health screen. The synthetic harness remains source code and is covered by unit tests. It is not constructed, and its outputs are not shown. No causal or clinical efficacy claim follows from those tests.
 
 ## Storage and communication
 

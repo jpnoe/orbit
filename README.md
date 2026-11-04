@@ -30,8 +30,8 @@ flowchart TD
 - A fixed ten-axis vector normalizes selected observations to 0–1.
 - A presence bitmask distinguishes missing sources from neutral numeric fill. Distance uses only axes present in both vectors and returns infinity for no overlap.
 - A custom HNSW-style index supports approximate neighbor lookup over a rolling 90-day working window.
-- Core distances and a mutual-reachability threshold support incremental merging. A weekly compaction job rebuilds the index and recomputes grouping.
-- `NeighborhoodSuggester` selects candidate higher-mood neighborhoods, with dense-group, sparse-neighbor, and learning-message paths. This logic is exercised by tests and a debug diagnostic flow, not a complete user-facing recommendation experience.
+- Core distances and a mutual-reachability threshold support incremental merging. The weekly compaction job is no longer scheduled.
+- `NeighborhoodSuggester` selects candidate higher-mood neighborhoods, with dense-group, sparse-neighbor, and learning-message paths. Unit tests still exercise that code. The app does not construct it or show its output.
 
 The implementation is a custom density-based grouping heuristic. It does not implement or claim a full HDBSCAN pipeline.
 
@@ -46,7 +46,7 @@ chmod +x gradlew
 ./gradlew assembleDebug
 ```
 
-The wrapper pins Gradle 8.11.1. SDK and dependency downloads require network access. Health Connect availability and permissions depend on the test device; logging and manual state encoding can be explored separately.
+The wrapper pins Gradle 8.11.1. SDK and dependency downloads require network access. Health Connect availability and permissions depend on the test device.
 
 ## Tests
 

@@ -50,9 +50,21 @@ data class WearableObservation(
 
     companion object {
         /**
-         * Same source identity produces the same primary key, so a repeated sync
-         * replaces the row. Aggregates have no Health Connect record id, so their
-         * identity is the metric, method, and exact requested window.
+         * Primary key for one imported observation. A repeated sync replaces the row.
+         *
+         * A record-backed observation uses source, metric, method, and the stable
+         * Health Connect record id. Its value and measurement times can change
+         * without changing the key. A blank record id is treated as absent, so
+         * that row falls through to the window key below.
+         *
+         * A heart-rate sample has no id of its own. Its key is the parent record
+         * id plus the sample timestamp, so two samples from one parent stay
+         * distinct and reimporting the same sample replaces it. A blank parent id
+         * is absent, and the sample time is then the window.
+         *
+         * An aggregate has no record id. Its key is source, metric, method, and
+         * the exact requested start and end. A different requested window is a
+         * different row.
          */
         fun identity(
             source: String,
@@ -62,15 +74,27 @@ data class WearableObservation(
             observedStartAt: Long,
             observedEndAt: Long,
         ): String {
-            val key = listOf(
-                source,
-                sourceRecordId.orEmpty(),
-                metric,
-                method,
-                observedStartAt.toString(),
-                observedEndAt.toString(),
-            ).joinToString("|")
-            return UUID.nameUUIDFromBytes(key.toByteArray(StandardCharsets.UTF_8)).toString()
+            val recordId = sourceRecordId?.takeIf { it.isNotBlank() }
+            val key = when {
+                method == WearableMethod.HEART_RATE_SAMPLE && recordId != null -> listOf(
+                    source,
+                    recordId,
+                    metric,
+                    method,
+                    observedStartAt.toString(),
+                )
+                recordId != null -> listOf(source, recordId, metric, method)
+                else -> listOf(
+                    source,
+                    metric,
+                    method,
+                    observedStartAt.toString(),
+                    observedEndAt.toString(),
+                )
+            }
+            return UUID.nameUUIDFromBytes(
+                key.joinToString("|").toByteArray(StandardCharsets.UTF_8),
+            ).toString()
         }
 
         fun create(
@@ -163,4 +187,19 @@ object WearableUnit {
  */
 fun aggregatedWindows(observations: List<WearableObservation>): List<WearableObservation> {
     return observations.filter { it.temporalKind == WearableTemporalKind.AGGREGATED_WINDOW }
+}
+
+/** How many observations the Health screen shows. The stored history is not trimmed. */
+const val RECENT_HEALTH_LIMIT = 50
+
+/**
+ * Newest measurement first. The same measurement time is ordered by later import,
+ * then by id, so the order does not depend on insertion sequence.
+ */
+fun List<WearableObservation>.mostRecent(limit: Int = RECENT_HEALTH_LIMIT): List<WearableObservation> {
+    return sortedWith(
+        compareByDescending<WearableObservation> { it.observedStartAt }
+            .thenByDescending { it.importedAt }
+            .thenBy { it.id },
+    ).take(limit)
 }

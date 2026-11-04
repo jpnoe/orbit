@@ -7,7 +7,6 @@ import androidx.lifecycle.viewModelScope
 import com.orbit.wellness.data.WearableObservationRepository
 import com.orbit.wellness.data.biometrics.BiometricRepository
 import com.orbit.wellness.data.local.WearableObservation
-import com.orbit.wellness.domain.topology.TopologyHarness
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,14 +21,12 @@ data class HealthConnectUiState(
     val hasPermissions: Boolean = false,
     val isBusy: Boolean = false,
     val observations: List<WearableObservation> = emptyList(),
-    val axisRows: List<Pair<String, Float>> = emptyList(),
     val syncNotes: List<String> = emptyList(),
 )
 
 class HealthConnectViewModel(
     private val biometricRepository: BiometricRepository,
     private val wearableObservations: WearableObservationRepository,
-    private val topologyHarness: TopologyHarness? = null,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HealthConnectUiState())
@@ -41,7 +38,7 @@ class HealthConnectViewModel(
     init {
         refreshAvailability()
         viewModelScope.launch {
-            wearableObservations.observe().collect { observations ->
+            wearableObservations.observeRecent().collect { observations ->
                 _uiState.update { it.copy(observations = observations) }
             }
         }
@@ -104,36 +101,6 @@ class HealthConnectViewModel(
         }
     }
 
-    fun encodeOnly() {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isBusy = true) }
-            try {
-                val vector = biometricRepository.encodeOnly()
-                _uiState.update { it.copy(axisRows = vector.labeledPairs()) }
-                _messages.trySend("Encoded the dormant state vector. Wearable sync was not run.")
-            } catch (e: Exception) {
-                _messages.trySend(e.message ?: "Encode failed.")
-            } finally {
-                _uiState.update { it.copy(isBusy = false) }
-            }
-        }
-    }
-
-    fun seedSyntheticTopology() {
-        val harness = topologyHarness ?: return
-        viewModelScope.launch {
-            _uiState.update { it.copy(isBusy = true) }
-            try {
-                val summary = harness.seedAndEvaluate()
-                _messages.trySend(summary)
-            } catch (e: Exception) {
-                _messages.trySend(e.message ?: "Synthetic seed failed.")
-            } finally {
-                _uiState.update { it.copy(isBusy = false) }
-            }
-        }
-    }
-
     fun sdkStatusLabel(): String = when (_uiState.value.sdkStatusCode) {
         HealthConnectClient.SDK_AVAILABLE -> "Available"
         HealthConnectClient.SDK_UNAVAILABLE -> "Unavailable"
@@ -144,14 +111,12 @@ class HealthConnectViewModel(
     class Factory(
         private val biometricRepository: BiometricRepository,
         private val wearableObservations: WearableObservationRepository,
-        private val topologyHarness: TopologyHarness? = null,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             return HealthConnectViewModel(
                 biometricRepository,
                 wearableObservations,
-                topologyHarness,
             ) as T
         }
     }

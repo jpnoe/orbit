@@ -1,23 +1,16 @@
 package com.orbit.wellness.data.biometrics
 
-import android.util.Log
 import com.orbit.wellness.data.local.WearableObservation
 import com.orbit.wellness.data.local.WearableObservationDao
-import com.orbit.wellness.domain.state.StateEncoder
-import com.orbit.wellness.domain.state.StateVector
-import com.orbit.wellness.domain.topology.TopologyRepository
 import java.time.Instant
 
 /**
  * Imports Health Connect observations into Room.
- * Sync does not encode a state vector or ingest topology. [encodeOnly] remains
- * only for the dormant ten-axis path.
+ * Sync does not encode a state vector or ingest topology.
  */
 class BiometricRepository(
     private val reader: WearableReadGateway,
     private val wearableObservationDao: WearableObservationDao,
-    private val dormantEncoder: StateEncoder? = null,
-    private val dormantTopology: TopologyRepository? = null,
 ) {
     fun isHealthConnectAvailable(): Boolean = reader.isAvailable()
 
@@ -71,22 +64,6 @@ class BiometricRepository(
      */
     suspend fun suggestSleepFromHealthConnect(): SleepSessionSuggestion? =
         reader.readLatestSleepSession()
-
-    suspend fun encodeOnly(): StateVector {
-        val encoder = checkNotNull(dormantEncoder) {
-            "The dormant state encoder is not configured."
-        }
-        val snapshot = encoder.encodeAndPersist()
-        val topology = dormantTopology
-        if (topology != null) {
-            try {
-                topology.ingest(snapshot)
-            } catch (e: Exception) {
-                Log.w("OrbitTopology", "ingest failed; encode still persisted", e)
-            }
-        }
-        return StateVector.fromSnapshot(snapshot)
-    }
 
     data class SyncResult(
         val observations: List<WearableObservation>,

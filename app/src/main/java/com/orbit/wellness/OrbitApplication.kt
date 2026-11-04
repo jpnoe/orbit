@@ -25,9 +25,6 @@ import com.orbit.wellness.data.local.OrbitDatabase
 import com.orbit.wellness.data.sharing.InboundSmsAudit
 import com.orbit.wellness.data.sharing.SharingRepository
 import com.orbit.wellness.data.sharing.StatusSummaryBuilder
-import com.orbit.wellness.domain.state.StateEncoder
-import com.orbit.wellness.domain.topology.TopologyHarness
-import com.orbit.wellness.domain.topology.TopologyRepository
 import com.orbit.wellness.util.NotificationHelper
 import com.orbit.wellness.worker.BiometricSyncWorker
 import com.orbit.wellness.worker.ReminderScheduler
@@ -69,10 +66,6 @@ class OrbitApplication : Application() {
     lateinit var currentMoodStore: CurrentMoodStore
         private set
     lateinit var biometricRepository: BiometricRepository
-        private set
-    lateinit var topologyRepository: TopologyRepository
-        private set
-    lateinit var topologyHarness: TopologyHarness
         private set
     lateinit var themePreferences: ThemePreferences
         private set
@@ -153,33 +146,9 @@ class OrbitApplication : Application() {
             inboundAudit = InboundSmsAudit(this),
         )
 
-        val stateEncoder = StateEncoder(
-            moodSampleDao = database.moodSampleDao(),
-            sleepEventDao = database.sleepEventDao(),
-            activityEventDao = database.activityEventDao(),
-            workoutEventDao = database.workoutEventDao(),
-            substanceUseEventDao = database.substanceUseEventDao(),
-            mealEventDao = database.mealEventDao(),
-            biometricSnapshotDao = database.biometricSnapshotDao(),
-            stateVectorSnapshotDao = database.stateVectorSnapshotDao(),
-            currentMoodStore = currentMoodStore,
-        )
-        topologyRepository = TopologyRepository(
-            snapshotDao = database.stateVectorSnapshotDao(),
-            nodeDao = database.topologyNodeDao(),
-            edgeDao = database.topologyEdgeDao(),
-            clusterMetaDao = database.clusterMetaDao(),
-            stateDao = database.topologyStateDao(),
-        )
-        topologyHarness = TopologyHarness(
-            snapshotDao = database.stateVectorSnapshotDao(),
-            topologyRepository = topologyRepository,
-        )
         biometricRepository = BiometricRepository(
             reader = HealthConnectReader(this),
             wearableObservationDao = database.wearableObservationDao(),
-            dormantEncoder = stateEncoder,
-            dormantTopology = topologyRepository,
         )
 
         applicationScope.launch {
@@ -192,7 +161,6 @@ class OrbitApplication : Application() {
             moodRepository.getLatestSample()?.let { sample ->
                 currentMoodStore.hydrateFromSample(sample.moodScore, sample.recordedAt)
             }
-            topologyRepository.warmUp()
         }
 
         NotificationHelper.createReminderChannel(this)
@@ -203,6 +171,6 @@ class OrbitApplication : Application() {
             )
         }
         BiometricSyncWorker.schedule(this)
-        TopologyCompactWorker.schedule(this)
+        TopologyCompactWorker.cancel(this)
     }
 }

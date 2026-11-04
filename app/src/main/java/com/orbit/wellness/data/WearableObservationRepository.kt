@@ -1,5 +1,6 @@
 package com.orbit.wellness.data
 
+import com.orbit.wellness.data.local.RECENT_HEALTH_LIMIT
 import com.orbit.wellness.data.local.WearableMetric
 import com.orbit.wellness.data.local.WearableObservation
 import com.orbit.wellness.data.local.WearableObservationDao
@@ -17,8 +18,16 @@ class WearableObservationRepository(
     private val dao: WearableObservationDao,
     private val computation: CoroutineDispatcher = Dispatchers.Default,
 ) {
+    /** Complete imported history for Insights and later analysis. */
     fun observe(): Flow<List<WearableObservation>> {
         return dao.observeAll()
+            .distinctUntilChanged()
+            .flowOn(computation)
+    }
+
+    /** Bounded list for the Health screen. Older stored rows stay in [observe]. */
+    fun observeRecent(limit: Int = RECENT_HEALTH_LIMIT): Flow<List<WearableObservation>> {
+        return dao.observeRecent(limit)
             .distinctUntilChanged()
             .flowOn(computation)
     }

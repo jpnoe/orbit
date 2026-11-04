@@ -412,7 +412,6 @@ fun OrbitApp(
                     factory = HealthConnectViewModel.Factory(
                         biometricRepository = application.biometricRepository,
                         wearableObservations = application.wearableObservationRepository,
-                        topologyHarness = application.topologyHarness,
                     ),
                 )
                 ProfileScreen(
