@@ -313,7 +313,7 @@
     <string name="accent_slate">Slate</string>
     <string name="health_connect_tab">Health</string>
     <string name="health_connect_title">Health Connect</string>
-    <string name="health_connect_subtitle">Imports selected Health Connect summaries for the current day: step total, the latest resting heart rate or one fallback, and the latest sleep session. Nothing leaves this phone.</string>
+    <string name="health_connect_subtitle">Connects Health Connect so Orbit can import physiological summaries that a wearable provider has already written. Nothing leaves this phone.</string>
     <string name="health_connect_status">Status: %1$s · %2$s</string>
     <string name="health_connect_perms_granted">permissions granted</string>
     <string name="health_connect_perms_needed">permissions needed</string>
@@ -322,13 +322,13 @@
     <string name="health_connect_install">Install Health Connect</string>
     <string name="health_connect_grant">Grant Health Connect access</string>
     <string name="health_connect_regrant">Re-check Health Connect permissions</string>
-    <string name="health_connect_sync">Sync wearable data</string>
-    <string name="health_connect_sync_help">Stores those selected summaries with their measurement time or window. It does not import every sensor sample, and a deletion in Health Connect is not yet removed here. Orbit syncs about once an hour when permissions allow.</string>
+    <string name="health_connect_sync">Import current summaries</string>
+    <string name="health_connect_sync_help">Imports the current day’s selected summaries now. Saving a check-in also requests one interval import for that saved context window. The provider may not have written those measurements yet, so an empty import is left as-is. A daily fallback repeats the summary import. This does not read every sensor sample, and a Health Connect deletion is not yet removed here.</string>
     <string name="topology_learning_baseline">Still learning your baseline patterns—keep logging to unlock insights.</string>
-    <string name="health_connect_observations_title">Recent observations</string>
-    <string name="health_connect_observations_empty">No wearable observations have been read yet.</string>
+    <string name="health_connect_status_heading">Import status</string>
+    <string name="health_connect_observations_empty">No wearable observations have been imported.</string>
     <string name="health_connect_latest_import">Latest import: %1$s</string>
-    <string name="health_connect_observation_line">%1$s: %2$s · %3$s</string>
+    <string name="health_connect_stored_metrics">Stored metric types: %1$s</string>
     <string name="health_connect_notes_title">Sync notes</string>
     <string name="sleep_prefill_health_connect">Bedtime and wake prefilled from your wearable — adjust if needed, then save.</string>
     <string name="trusted_contacts_title">Trusted contacts</string>

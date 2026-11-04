@@ -6,21 +6,18 @@ import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.metadata.Metadata
 import com.orbit.wellness.data.WearableObservationRepository
 import com.orbit.wellness.data.local.SleepEvent
-import com.orbit.wellness.data.local.RECENT_HEALTH_LIMIT
 import com.orbit.wellness.data.local.WearableMethod
 import com.orbit.wellness.data.local.WearableMetric
 import com.orbit.wellness.data.local.WearableObservation
 import com.orbit.wellness.data.local.WearableObservationDao
 import com.orbit.wellness.data.local.WearableTemporalKind
 import com.orbit.wellness.data.local.aggregatedWindows
-import com.orbit.wellness.data.local.mostRecent
 import com.orbit.wellness.data.wearableCoverage
 import com.orbit.wellness.domain.checkin.TemporalWindowProjector
 import com.orbit.wellness.ui.wearable.wearableMetricLabelRes
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -321,7 +318,7 @@ class WearableObservationTest {
         assertTrue(strings.contains(">Heart-rate average<"))
         assertTrue(strings.contains(">Heart-rate sample<"))
         assertTrue(strings.contains("These counts describe the selected summaries that were imported."))
-        assertTrue(strings.contains("Recent observations"))
+        assertTrue(strings.contains("Import status"))
         val wearableCopy = strings.substringAfter("insights_wearable_heading")
             .substringBefore("health_connect_tab")
         assertTrue(!wearableCopy.contains("correlat", ignoreCase = true))
@@ -342,12 +339,12 @@ class WearableObservationTest {
     }
 
     @Test
-    fun recentObserverIsBoundedWhileAnalysisKeepsTheFullHistory() = runBlocking {
+    fun analysisObserverKeepsTheFullHistory() = runBlocking {
         val dao = MemoryWearableDao()
         val repository = WearableObservationRepository(dao)
-        val observations = (0 until RECENT_HEALTH_LIMIT + 10).map { index ->
+        val observations = (0 until 60).map { index ->
             point(
-                at = 1_000L + (index % 7),
+                at = 1_000L + index,
                 importedAt = 5_000L + index,
                 recordId = "row-$index",
                 value = index.toDouble(),
@@ -355,15 +352,21 @@ class WearableObservationTest {
         }
         dao.upsertAll(observations)
         val full = repository.observe().first()
-        val recent = repository.observeRecent().first()
-        val expected = observations.mostRecent()
-        assertEquals(observations.size, full.size)
-        assertEquals(RECENT_HEALTH_LIMIT, recent.size)
-        assertEquals(expected.map { it.id }, recent.map { it.id })
-        assertEquals(expected.map { it.id }, observations.mostRecent().map { it.id })
-        val omitted = full.map { it.id }.toSet() - recent.map { it.id }.toSet()
-        assertEquals(10, omitted.size)
-        assertTrue(omitted.all { id -> full.any { it.id == id } })
+        val coverage = wearableCoverage(full)
+        assertEquals(60, full.size)
+        assertEquals(60, coverage.countByMetric.single().count)
+        val screen = sourceFile(
+            "src/main/java/com/orbit/wellness/ui/profile/HealthConnectSection.kt",
+            "app/src/main/java/com/orbit/wellness/ui/profile/HealthConnectSection.kt",
+        ).readText()
+        val viewModel = sourceFile(
+            "src/main/java/com/orbit/wellness/ui/profile/HealthConnectViewModel.kt",
+            "app/src/main/java/com/orbit/wellness/ui/profile/HealthConnectViewModel.kt",
+        ).readText()
+        assertTrue(!screen.contains("WearableObservationLine"))
+        assertTrue(!screen.contains("health_connect_observation_line"))
+        assertTrue(!viewModel.contains("observeRecent"))
+        assertTrue(viewModel.contains("observeCoverage"))
     }
 
     private fun point(
@@ -431,6 +434,10 @@ class WearableObservationTest {
         )
     }
 
+    private fun sourceFile(vararg paths: String): File {
+        return paths.map { File(it) }.first { it.isFile }
+    }
+
     private fun stringsFile(): File {
         return listOf(
             File("src/main/res/values/strings.xml"),
@@ -448,10 +455,6 @@ class WearableObservationTest {
         }
 
         override fun observeAll(): Flow<List<WearableObservation>> = published
-
-        override fun observeRecent(limit: Int): Flow<List<WearableObservation>> {
-            return published.map { observations -> observations.mostRecent(limit) }
-        }
     }
 
     private class FakeReader(
@@ -468,6 +471,8 @@ class WearableObservationTest {
         override suspend fun hasBackgroundReadPermission(): Boolean = true
 
         override suspend fun readObservations(now: Instant): WearableReadResult? = result
+
+        override suspend fun readInterval(start: Instant, end: Instant): WearableReadResult? = null
 
         override suspend fun readLatestSleepSession(now: Instant): com.orbit.wellness.data.biometrics.SleepSessionSuggestion? {
             sleepPrefillReads += 1

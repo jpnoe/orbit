@@ -188,18 +188,3 @@ object WearableUnit {
 fun aggregatedWindows(observations: List<WearableObservation>): List<WearableObservation> {
     return observations.filter { it.temporalKind == WearableTemporalKind.AGGREGATED_WINDOW }
 }
-
-/** How many observations the Health screen shows. The stored history is not trimmed. */
-const val RECENT_HEALTH_LIMIT = 50
-
-/**
- * Newest measurement first. The same measurement time is ordered by later import,
- * then by id, so the order does not depend on insertion sequence.
- */
-fun List<WearableObservation>.mostRecent(limit: Int = RECENT_HEALTH_LIMIT): List<WearableObservation> {
-    return sortedWith(
-        compareByDescending<WearableObservation> { it.observedStartAt }
-            .thenByDescending { it.importedAt }
-            .thenBy { it.id },
-    ).take(limit)
-}

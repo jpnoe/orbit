@@ -25,8 +25,6 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 import com.orbit.wellness.R
 import com.orbit.wellness.data.biometrics.HealthConnectPermissions
-import com.orbit.wellness.data.local.WearableObservation
-import com.orbit.wellness.data.local.WearableTemporalKind
 import com.orbit.wellness.ui.util.CollectSnackbarMessages
 import com.orbit.wellness.ui.util.InlineLoading
 import com.orbit.wellness.ui.wearable.wearableMetricLabelRes
@@ -153,27 +151,33 @@ fun HealthConnectSection(
         }
 
         Text(
-            text = stringResource(R.string.health_connect_observations_title),
+            text = stringResource(R.string.health_connect_status_heading),
             style = MaterialTheme.typography.titleMedium,
         )
-        if (uiState.observations.isEmpty()) {
+        if (!uiState.wearable.hasObservations) {
             Text(
                 text = stringResource(R.string.health_connect_observations_empty),
                 style = MaterialTheme.typography.bodyMedium,
             )
         } else {
-            val latestImport = uiState.observations.maxOf { it.importedAt }
-            Text(
-                text = stringResource(
-                    R.string.health_connect_latest_import,
-                    DateUtils.datedTimeLabel(latestImport),
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            uiState.observations.forEach { observation ->
-                WearableObservationLine(observation)
+            uiState.wearable.latestImportedAt?.let { importedAt ->
+                Text(
+                    text = stringResource(
+                        R.string.health_connect_latest_import,
+                        DateUtils.datedTimeLabel(importedAt),
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
             }
+            var metricNames = ""
+            for (count in uiState.wearable.countByMetric) {
+                val name = stringResource(wearableMetricLabelRes(count.metric))
+                metricNames = if (metricNames.isEmpty()) name else "$metricNames, $name"
+            }
+            Text(
+                text = stringResource(R.string.health_connect_stored_metrics, metricNames),
+                style = MaterialTheme.typography.bodyMedium,
+            )
         }
 
         if (uiState.syncNotes.isNotEmpty()) {
@@ -193,30 +197,3 @@ fun HealthConnectSection(
     }
 }
 
-@Composable
-private fun WearableObservationLine(observation: WearableObservation) {
-    val window = if (observation.temporalKind == WearableTemporalKind.POINT) {
-        DateUtils.datedTimeLabel(observation.observedStartAt)
-    } else {
-        DateUtils.timeRangeLabel(observation.observedStartAt, observation.observedEndAt)
-    }
-    Text(
-        text = stringResource(
-            R.string.health_connect_observation_line,
-            stringResource(wearableMetricLabelRes(observation.metric)),
-            formatWearableValue(observation),
-            window,
-        ),
-        style = MaterialTheme.typography.bodyMedium,
-    )
-}
-
-private fun formatWearableValue(observation: WearableObservation): String {
-    val whole = observation.value % 1.0 == 0.0
-    val number = if (whole) {
-        observation.value.toLong().toString()
-    } else {
-        String.format(java.util.Locale.US, "%.2f", observation.value)
-    }
-    return "$number ${observation.unit}"
-}

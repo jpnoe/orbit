@@ -4,9 +4,9 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.orbit.wellness.data.WearableCoverage
 import com.orbit.wellness.data.WearableObservationRepository
 import com.orbit.wellness.data.biometrics.BiometricRepository
-import com.orbit.wellness.data.local.WearableObservation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,7 +20,13 @@ data class HealthConnectUiState(
     val sdkStatusCode: Int = HealthConnectClient.SDK_UNAVAILABLE,
     val hasPermissions: Boolean = false,
     val isBusy: Boolean = false,
-    val observations: List<WearableObservation> = emptyList(),
+    val wearable: WearableCoverage = WearableCoverage(
+        hasObservations = false,
+        countByMetric = emptyList(),
+        earliestMeasurementAt = null,
+        latestMeasurementAt = null,
+        latestImportedAt = null,
+    ),
     val syncNotes: List<String> = emptyList(),
 )
 
@@ -38,8 +44,8 @@ class HealthConnectViewModel(
     init {
         refreshAvailability()
         viewModelScope.launch {
-            wearableObservations.observeRecent().collect { observations ->
-                _uiState.update { it.copy(observations = observations) }
+            wearableObservations.observeCoverage().collect { coverage ->
+                _uiState.update { it.copy(wearable = coverage) }
             }
         }
     }

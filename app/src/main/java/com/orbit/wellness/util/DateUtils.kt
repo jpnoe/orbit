@@ -155,6 +155,11 @@ object DateUtils {
         return Instant.ofEpochMilli(millis).atZone(zone).toLocalDate()
     }
 
+    /** Local midnight of [anchor], not of the current clock. */
+    fun localDayStart(anchor: Instant, zone: ZoneId = ZoneId.systemDefault()): Instant {
+        return anchor.atZone(zone).toLocalDate().atStartOfDay(zone).toInstant()
+    }
+
     fun utcMidnightMillis(millis: Long, zone: ZoneId = ZoneId.systemDefault()): Long {
         return localDateOf(millis, zone).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
     }

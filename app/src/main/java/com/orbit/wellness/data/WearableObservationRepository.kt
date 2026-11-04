@@ -1,6 +1,5 @@
 package com.orbit.wellness.data
 
-import com.orbit.wellness.data.local.RECENT_HEALTH_LIMIT
 import com.orbit.wellness.data.local.WearableMetric
 import com.orbit.wellness.data.local.WearableObservation
 import com.orbit.wellness.data.local.WearableObservationDao
@@ -9,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 
 /**
  * Read-only view of imported wearable observations.
@@ -25,11 +25,9 @@ class WearableObservationRepository(
             .flowOn(computation)
     }
 
-    /** Bounded list for the Health screen. Older stored rows stay in [observe]. */
-    fun observeRecent(limit: Int = RECENT_HEALTH_LIMIT): Flow<List<WearableObservation>> {
-        return dao.observeRecent(limit)
-            .distinctUntilChanged()
-            .flowOn(computation)
+    /** Metric coverage for the Health status summary. This is not a row browser. */
+    fun observeCoverage(): Flow<WearableCoverage> {
+        return observe().map { wearableCoverage(it) }.distinctUntilChanged()
     }
 }
 

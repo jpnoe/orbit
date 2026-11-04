@@ -29,6 +29,7 @@ import com.orbit.wellness.util.NotificationHelper
 import com.orbit.wellness.worker.BiometricSyncWorker
 import com.orbit.wellness.worker.ReminderScheduler
 import com.orbit.wellness.worker.TopologyCompactWorker
+import com.orbit.wellness.worker.WorkManagerWearableCaptureScheduler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -95,6 +96,7 @@ class OrbitApplication : Application() {
             wakeTimes = { localDate ->
                 database.sleepEventDao().getForDate(localDate)?.wakeTime
             },
+            captures = WorkManagerWearableCaptureScheduler(this),
         )
         journalRepository = JournalRepository(database.dailyJournalDao())
         activityRepository = ActivityRepository(

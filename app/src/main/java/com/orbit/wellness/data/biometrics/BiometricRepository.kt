@@ -1,5 +1,6 @@
 package com.orbit.wellness.data.biometrics
 
+import com.orbit.wellness.data.local.CheckInContextWindow
 import com.orbit.wellness.data.local.WearableObservation
 import com.orbit.wellness.data.local.WearableObservationDao
 import java.time.Instant
@@ -54,6 +55,41 @@ class BiometricRepository(
             SyncResult(
                 observations = emptyList(),
                 error = e.message ?: "Health Connect sync failed.",
+            )
+        }
+    }
+
+    /**
+     * Imports summaries for the exact stored context interval.
+     * Does not recompute the boundary and does not write the check-in.
+     * An unavailable source or an empty result leaves no rows.
+     */
+    suspend fun captureInterval(window: CheckInContextWindow): SyncResult {
+        return try {
+            val read = reader.readInterval(
+                start = Instant.ofEpochMilli(window.windowStartAt),
+                end = Instant.ofEpochMilli(window.windowEndAt),
+            )
+            if (read == null) {
+                SyncResult(
+                    observations = emptyList(),
+                    error = null,
+                    notes = listOf("Health Connect is unavailable or not permitted. No interval observations were stored."),
+                )
+            } else {
+                if (read.observations.isNotEmpty()) {
+                    wearableObservationDao.upsertAll(read.observations)
+                }
+                SyncResult(
+                    observations = read.observations,
+                    error = null,
+                    notes = read.notes,
+                )
+            }
+        } catch (e: Exception) {
+            SyncResult(
+                observations = emptyList(),
+                error = e.message ?: "Interval import failed.",
             )
         }
     }

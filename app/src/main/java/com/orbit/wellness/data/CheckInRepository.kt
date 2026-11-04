@@ -30,6 +30,7 @@ class CheckInRepository(
     },
     private val moodRemover: MoodSampleRemover = MoodSampleRemover { },
     private val transaction: DatabaseTransaction = ImmediateDatabaseTransaction(),
+    private val captures: WearableCaptureScheduler = NoWearableCapture,
     private val wakeTimes: CheckInWakeTimeSource = CheckInWakeTimeSource { null },
 ) {
     fun observeEnabledAxes(): Flow<List<CheckInAxis>> = dao.observeEnabledAxes()
@@ -182,6 +183,9 @@ class CheckInRepository(
                 dao.completeContextIfUnset(record.id, completedAt)
             }
         }
+        if (completedAt != null) {
+            scheduleIntervalCapture(record.id)
+        }
         return SavedCheckIn(record = record, legacyMoodSampleId = moodSample?.id)
     }
 
@@ -222,8 +226,22 @@ class CheckInRepository(
      */
     suspend fun completeContext(checkInId: String, completedAt: Long = System.currentTimeMillis()): Long {
         require(checkInId.isNotBlank()) { "Check-in id cannot be blank" }
-        return dao.completeContextIfUnset(checkInId, completedAt)
+        val stored = dao.completeContextIfUnset(checkInId, completedAt)
             ?: error("Context window does not exist")
+        scheduleIntervalCapture(checkInId)
+        return stored
+    }
+
+    /**
+     * Enqueues one interval import after the completion transaction has returned.
+     * A scheduler failure is logged and does not change the saved check-in.
+     */
+    private fun scheduleIntervalCapture(checkInId: String) {
+        try {
+            captures.scheduleIntervalCapture(checkInId)
+        } catch (_: Exception) {
+            // The check-in is already stored. Scheduling must not fail that save.
+        }
     }
 
     /**

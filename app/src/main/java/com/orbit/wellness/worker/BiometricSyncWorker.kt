@@ -7,11 +7,12 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.orbit.wellness.OrbitApplication
+import java.time.Duration
 import java.util.concurrent.TimeUnit
 
 /**
- * Hourly Health Connect import of wearable observations.
- * Does not encode a state vector. Requires Health Connect read permission.
+ * Daily fallback import of selected Health Connect summaries.
+ * Check-in interval imports are separate one-time work.
  */
 class BiometricSyncWorker(
     appContext: Context,
@@ -30,17 +31,20 @@ class BiometricSyncWorker(
     }
 
     companion object {
-        const val UNIQUE_WORK_NAME = "hourly_biometric_sync"
+        const val UNIQUE_WORK_NAME = "daily_wearable_sync"
+        const val LEGACY_HOURLY_WORK_NAME = "hourly_biometric_sync"
+        val REPEAT_INTERVAL: Duration = Duration.ofDays(1)
 
         fun schedule(context: Context) {
+            val workManager = WorkManager.getInstance(context.applicationContext)
+            workManager.cancelUniqueWork(LEGACY_HOURLY_WORK_NAME)
             val request = PeriodicWorkRequestBuilder<BiometricSyncWorker>(
-                1,
-                TimeUnit.HOURS,
+                REPEAT_INTERVAL.toDays(),
+                TimeUnit.DAYS,
             ).build()
-
-            WorkManager.getInstance(context.applicationContext).enqueueUniquePeriodicWork(
+            workManager.enqueueUniquePeriodicWork(
                 UNIQUE_WORK_NAME,
-                ExistingPeriodicWorkPolicy.KEEP,
+                ExistingPeriodicWorkPolicy.UPDATE,
                 request,
             )
         }

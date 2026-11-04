@@ -17,8 +17,8 @@ import com.orbit.wellness.data.local.WearableMetric
 import com.orbit.wellness.data.local.WearableObservation
 import com.orbit.wellness.data.local.WearableTemporalKind
 import com.orbit.wellness.data.local.WearableUnit
+import com.orbit.wellness.util.DateUtils
 import java.time.Instant
-import java.time.LocalDate
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 
@@ -33,6 +33,7 @@ interface WearableReadGateway {
     suspend fun hasAllReadPermissions(): Boolean
     suspend fun hasBackgroundReadPermission(): Boolean
     suspend fun readObservations(now: Instant = Instant.now()): WearableReadResult?
+    suspend fun readInterval(start: Instant, end: Instant): WearableReadResult?
     suspend fun readLatestSleepSession(now: Instant = Instant.now()): SleepSessionSuggestion?
 }
 
@@ -75,7 +76,7 @@ class HealthConnectReader(
         if (!hasAllReadPermissions()) return null
 
         val zone = ZoneId.systemDefault()
-        val startOfDay = LocalDate.now(zone).atStartOfDay(zone).toInstant()
+        val startOfDay = DateUtils.localDayStart(now, zone)
         val lookback48h = now.minus(48, ChronoUnit.HOURS)
         val lookback7d = now.minus(7, ChronoUnit.DAYS)
         val notes = mutableListOf<String>()
@@ -95,6 +96,22 @@ class HealthConnectReader(
         }
         if (!hasStepsOrHeart) notes += EMPTY_HC_HINT
 
+        return WearableReadResult(observations = observations, notes = notes)
+    }
+
+    override suspend fun readInterval(start: Instant, end: Instant): WearableReadResult? {
+        if (!start.isBefore(end)) {
+            return WearableReadResult(
+                observations = emptyList(),
+                notes = listOf("Interval import skipped because the stored context window has no positive duration."),
+            )
+        }
+        val client = getClientOrNull() ?: return null
+        if (!hasAllReadPermissions()) return null
+        val notes = mutableListOf<String>()
+        val observations = mutableListOf<WearableObservation>()
+        observations += readStepsAggregateOnly(client, start, end, notes)
+        observations += readIntervalHeartRate(client, start, end, notes)
         return WearableReadResult(observations = observations, notes = notes)
     }
 
@@ -246,6 +263,105 @@ class HealthConnectReader(
         return emptyList()
     }
 
+    private suspend fun readStepsAggregateOnly(
+        client: HealthConnectClient,
+        start: Instant,
+        end: Instant,
+        notes: MutableList<String>,
+    ): List<WearableObservation> {
+        return try {
+            val aggregated = client.aggregate(
+                AggregateRequest(
+                    metrics = setOf(StepsRecord.COUNT_TOTAL),
+                    timeRangeFilter = TimeRangeFilter.between(start, end),
+                ),
+            )[StepsRecord.COUNT_TOTAL]
+            val observation = stepsAggregateOrAbsent(aggregated, start, end, end)
+            if (observation == null) {
+                notes += "Steps: no aggregate total for this interval."
+                emptyList()
+            } else {
+                listOf(observation)
+            }
+        } catch (e: SecurityException) {
+            notes += "Steps: permission denied."
+            Log.w(TAG, "Interval steps security", e)
+            emptyList()
+        } catch (e: Exception) {
+            notes += "Steps: aggregate read failed (${e.message ?: "error"})."
+            Log.w(TAG, "Interval steps failed", e)
+            emptyList()
+        }
+    }
+
+    private suspend fun readIntervalHeartRate(
+        client: HealthConnectClient,
+        start: Instant,
+        end: Instant,
+        notes: MutableList<String>,
+    ): List<WearableObservation> {
+        try {
+            val resting = readAllRecords(
+                client,
+                ReadRecordsRequest(
+                    recordType = RestingHeartRateRecord::class,
+                    timeRangeFilter = TimeRangeFilter.between(start, end),
+                ),
+            ).map { restingHeartRate(it, importedAt = end) }
+                .filter { observedInside(it.observedStartAt, start.toEpochMilli(), end.toEpochMilli()) }
+            val latest = resting.maxByOrNull { it.observedStartAt }
+            if (latest != null) return listOf(latest)
+        } catch (e: SecurityException) {
+            notes += "Resting heart rate: permission denied."
+            Log.w(TAG, "Interval resting heart rate security", e)
+            return emptyList()
+        } catch (e: Exception) {
+            Log.w(TAG, "Interval resting heart rate failed", e)
+        }
+
+        try {
+            val avg = client.aggregate(
+                AggregateRequest(
+                    metrics = setOf(HeartRateRecord.BPM_AVG),
+                    timeRangeFilter = TimeRangeFilter.between(start, end),
+                ),
+            )[HeartRateRecord.BPM_AVG]
+            val average = heartRateAverageOrAbsent(avg, start, end, end)
+            if (average != null) return listOf(average)
+        } catch (e: SecurityException) {
+            notes += "Heart rate: permission denied — re-grant Health Connect access."
+            Log.w(TAG, "Interval heart-rate average security", e)
+            return emptyList()
+        } catch (e: Exception) {
+            Log.w(TAG, "Interval heart-rate average failed", e)
+        }
+
+        return try {
+            val latest = readAllRecords(
+                client,
+                ReadRecordsRequest(
+                    recordType = HeartRateRecord::class,
+                    timeRangeFilter = TimeRangeFilter.between(start, end),
+                ),
+            ).flatMap { record -> record.samples.map { sample -> record to sample } }
+                .filter { (_, sample) ->
+                    observedInside(sample.time.toEpochMilli(), start.toEpochMilli(), end.toEpochMilli())
+                }
+                .maxByOrNull { (_, sample) -> sample.time }
+            if (latest == null) {
+                notes += "Heart rate: no resting record, average, or sample in this interval."
+                emptyList()
+            } else {
+                notes += "Heart rate: no resting record or average. Stored the latest sample in this interval."
+                listOf(heartRateSample(latest.first, latest.second, importedAt = end))
+            }
+        } catch (e: Exception) {
+            notes += "Heart rate: read failed (${e.message ?: "error"})."
+            Log.w(TAG, "Interval heart-rate sample failed", e)
+            emptyList()
+        }
+    }
+
     private suspend fun readLatestSleepSessionInternal(
         client: HealthConnectClient,
         start: Instant,
@@ -300,6 +416,10 @@ class HealthConnectReader(
         const val EMPTY_HC_HINT =
             "Health Connect has no steps or heart-rate yet. In the Fitbit app, enable writing to Health Connect, then confirm data under Health Connect → Data and access."
     }
+}
+
+internal fun observedInside(at: Long, startInclusive: Long, endExclusive: Long): Boolean {
+    return at >= startInclusive && at < endExclusive
 }
 
 internal fun stepsAggregateOrAbsent(

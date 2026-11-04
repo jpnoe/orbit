@@ -18,17 +18,4 @@ interface WearableObservationDao {
         """,
     )
     fun observeAll(): Flow<List<WearableObservation>>
-
-    /**
-     * Newest measurement, then newest import, then id. This matches
-     * [com.orbit.wellness.data.local.mostRecent] and does not delete older rows.
-     */
-    @Query(
-        """
-        SELECT * FROM wearable_observations
-        ORDER BY observedStartAt DESC, importedAt DESC, id ASC
-        LIMIT :limit
-        """,
-    )
-    fun observeRecent(limit: Int): Flow<List<WearableObservation>>
 }
