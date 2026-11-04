@@ -51,11 +51,9 @@ import com.orbit.wellness.R
 import com.orbit.wellness.data.CheckInDrafts
 import com.orbit.wellness.data.local.CheckInAxis
 import com.orbit.wellness.data.local.DefaultCheckInAxes
-import com.orbit.wellness.data.local.MoodSample
-import com.orbit.wellness.ui.history.EditMoodDialog
 import com.orbit.wellness.ui.util.CollectSavedFeedback
+import com.orbit.wellness.ui.util.InlineLoading
 import com.orbit.wellness.ui.util.LoggedAtField
-import com.orbit.wellness.ui.util.LoggedEntry
 import com.orbit.wellness.ui.util.rememberHideKeyboard
 import com.orbit.wellness.util.DateUtils
 import java.time.LocalDate
@@ -79,7 +77,6 @@ fun CheckInScreen(
     val hideKeyboard = rememberHideKeyboard()
     var sleepTimeField by remember { mutableStateOf<SleepTimeField?>(null) }
     var sleepEditing by remember { mutableStateOf(false) }
-    var editingMood by remember { mutableStateOf<MoodSample?>(null) }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -116,7 +113,9 @@ fun CheckInScreen(
             style = MaterialTheme.typography.headlineMedium,
         )
 
-        if (uiState.sleepLoaded) {
+        if (!uiState.sleepLoaded || !uiState.latestLoaded) {
+            InlineLoading()
+        } else {
             SleepSummaryCard(
                 alreadyLogged = uiState.hasLoggedSleepToday,
                 expanded = !uiState.hasLoggedSleepToday || sleepEditing,
@@ -135,49 +134,40 @@ fun CheckInScreen(
                     viewModel.saveSleep()
                 },
             )
-        }
 
-        Text(
-            text = stringResource(R.string.check_in_log_heading),
-            style = MaterialTheme.typography.titleLarge,
-        )
-        Button(
-            onClick = onOpenLog,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(R.string.check_in_add_entry))
-        }
+            Button(
+                onClick = onOpenLog,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.check_in_add_entry))
+            }
 
-        if (uiState.todaySamples.isNotEmpty()) {
-            Text(
-                text = stringResource(R.string.mood_logs_today, uiState.todaySampleCount),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            uiState.todaySamples.forEach { sample ->
-                val title = if (sample.emotion.isNotBlank()) {
-                    "${sample.moodScore}/10 · ${sample.emotion}"
-                } else {
-                    "${sample.moodScore}/10"
+            if (uiState.hasLatestCheckIn) {
+                val missing = stringResource(R.string.check_in_not_set)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = stringResource(R.string.latest_check_in),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        text = checkInMoodLine(uiState.latestMood, uiState.latestEmotion, missing),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        text = checkInAxisLine(DefaultCheckInAxes.ENERGY, uiState.latestEnergy, missing),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        text = checkInAxisLine(DefaultCheckInAxes.CONFIDENCE, uiState.latestConfidence, missing),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        text = checkInAxisLine(DefaultCheckInAxes.ANXIETY, uiState.latestAnxiety, missing),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
                 }
-                LoggedEntry(
-                    timeLabel = DateUtils.shortDateTimeLabel(sample.recordedAt),
-                    title = title,
-                    footer = sample.note.takeIf { it.isNotBlank() },
-                    onClick = { editingMood = sample },
-                )
             }
         }
-    }
-
-    editingMood?.let { sample ->
-        EditMoodDialog(
-            sample = sample,
-            onConfirm = { score, note ->
-                viewModel.updateMood(sample, score, note)
-                editingMood = null
-            },
-            onDismiss = { editingMood = null },
-        )
     }
 
     sleepTimeField?.let { field ->

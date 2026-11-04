@@ -36,6 +36,9 @@ interface CheckInDao {
     )
     suspend fun getValuesForCheckIn(checkInId: String): List<CheckInAxisValue>
 
+    @Query("SELECT * FROM check_in_axis_values")
+    fun observeAxisValues(): Flow<List<CheckInAxisValue>>
+
     @Query(
         """
         SELECT * FROM check_ins
@@ -327,6 +330,61 @@ interface CheckInDao {
 
     @Insert
     suspend fun insertMealFoods(foods: List<CheckInMealFoodItem>)
+
+    @Query(
+        """
+        SELECT * FROM check_ins
+        WHERE recordedAt >= :startMillis AND recordedAt <= :endMillis
+        ORDER BY recordedAt DESC, id DESC
+        """,
+    )
+    fun observeCheckInsBetween(startMillis: Long, endMillis: Long): Flow<List<CheckInRecord>>
+
+    @Query("SELECT * FROM check_in_context_windows")
+    fun observeContextWindows(): Flow<List<CheckInContextWindow>>
+
+    @Query("SELECT * FROM check_in_context_categories")
+    fun observeContextCategories(): Flow<List<CheckInContextCategory>>
+
+    @Query(
+        """
+        SELECT * FROM check_in_activity_items
+        ORDER BY activityName ASC, id ASC
+        """,
+    )
+    fun observeActivityItems(): Flow<List<CheckInActivityItem>>
+
+    @Query(
+        """
+        SELECT * FROM check_in_workout_items
+        ORDER BY rowid ASC
+        """,
+    )
+    fun observeWorkoutItems(): Flow<List<CheckInWorkoutItem>>
+
+    @Query(
+        """
+        SELECT * FROM check_in_usage_items
+        ORDER BY rowid ASC
+        """,
+    )
+    fun observeUsageItems(): Flow<List<CheckInUsageItem>>
+
+    @Query(
+        """
+        SELECT * FROM check_in_meals
+        ORDER BY sortOrder ASC, rowid ASC
+        """,
+    )
+    fun observeMeals(): Flow<List<CheckInMeal>>
+
+    @Query(
+        """
+        SELECT * FROM check_in_meal_food_items
+        ORDER BY sortOrder ASC, rowid ASC
+        """,
+    )
+    fun observeMealFoods(): Flow<List<CheckInMealFoodItem>>
 
     @Transaction
     suspend fun replaceDietSelections(

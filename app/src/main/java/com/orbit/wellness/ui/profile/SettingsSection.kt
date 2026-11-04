@@ -20,6 +20,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.orbit.wellness.R
+import com.orbit.wellness.ui.theme.AccentOption
+import com.orbit.wellness.ui.theme.AccentPicker
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
@@ -27,6 +29,8 @@ import java.time.format.DateTimeFormatter
 fun SettingsSection(
     reminderTime: LocalTime,
     onReminderTimeChanged: (LocalTime) -> Unit,
+    selectedAccent: AccentOption,
+    onAccentSelected: (AccentOption) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showPicker by remember { mutableStateOf(false) }
@@ -36,22 +40,28 @@ fun SettingsSection(
 
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text(
-            text = stringResource(R.string.reminder_time_title),
-            style = MaterialTheme.typography.titleMedium,
+        AccentPicker(
+            selected = selectedAccent,
+            onSelect = onAccentSelected,
         )
-        Text(
-            text = stringResource(R.string.reminder_time_subtitle, timeLabel),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        OutlinedButton(
-            onClick = { showPicker = true },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(R.string.reminder_time_change))
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = stringResource(R.string.reminder_time_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = stringResource(R.string.reminder_time_subtitle, timeLabel),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(
+                onClick = { showPicker = true },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.reminder_time_change))
+            }
         }
     }
 

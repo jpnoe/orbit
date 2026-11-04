@@ -1,6 +1,8 @@
 package com.orbit.wellness.ui.navigation
 
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxSize
@@ -8,13 +10,13 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
-import androidx.compose.material.icons.filled.FitnessCenter
-import androidx.compose.material.icons.filled.Medication
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Today
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -45,8 +47,6 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.orbit.wellness.OrbitApplication
 import com.orbit.wellness.R
-import com.orbit.wellness.ui.activity.ActivityScreen
-import com.orbit.wellness.ui.activity.ActivityViewModel
 import com.orbit.wellness.ui.checkin.CheckInLogScreen
 import com.orbit.wellness.ui.checkin.CheckInScreen
 import com.orbit.wellness.ui.checkin.CheckInViewModel
@@ -64,37 +64,17 @@ import com.orbit.wellness.ui.context.ContextualWorkoutScreen
 import com.orbit.wellness.ui.context.ContextualWorkoutViewModel
 import com.orbit.wellness.ui.util.CollectSnackbarMessages
 import com.orbit.wellness.ui.util.showBriefMessage
-import com.orbit.wellness.ui.diet.DietScreen
-import com.orbit.wellness.ui.diet.DietViewModel
-import com.orbit.wellness.ui.exercise.ExerciseScreen
-import com.orbit.wellness.ui.exercise.ExerciseViewModel
+import com.orbit.wellness.ui.history.HistoryScreen
 import com.orbit.wellness.ui.history.HistoryViewModel
-import com.orbit.wellness.ui.journal.JournalViewModel
 import com.orbit.wellness.ui.profile.HealthConnectViewModel
 import com.orbit.wellness.ui.profile.ProfileScreen
+import com.orbit.wellness.ui.profile.TrustedContactsSection
 import com.orbit.wellness.ui.profile.TrustedContactsViewModel
 import com.orbit.wellness.ui.trends.TrendsViewModel
 import com.orbit.wellness.ui.use.MyListsViewModel
-import com.orbit.wellness.ui.use.UseScreen
-import com.orbit.wellness.ui.use.UseViewModel
 
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-
-enum class OrbitDestination(
-    val route: String,
-) {
-    CheckIn("check_in"),
-    Activity("activity"),
-    Diet("diet"),
-    Exercise("exercise"),
-    Use("use"),
-    Profile("profile"),
-}
-
-private object CheckInRoutes {
-    const val LOG = "check_in/log"
-}
 
 @Composable
 fun OrbitApp(
@@ -156,18 +136,13 @@ fun OrbitApp(
     LaunchedEffect(pendingStatusRequestId) {
         val requestId = pendingStatusRequestId ?: return@LaunchedEffect
         trustedContactsViewModel.loadPendingRequest(requestId)
-        navigateToTab(OrbitDestination.Profile.route)
+        navController.navigate(OrbitNavigation.STATUS_REQUEST) {
+            launchSingleTop = true
+        }
         onStatusRequestConsumed()
     }
 
-    val destinations = listOf(
-        OrbitDestination.CheckIn,
-        OrbitDestination.Activity,
-        OrbitDestination.Exercise,
-        OrbitDestination.Diet,
-        OrbitDestination.Use,
-        OrbitDestination.Profile,
-    )
+    val destinations = OrbitNavigation.topLevel
 
     Scaffold(
         modifier = modifier
@@ -193,8 +168,7 @@ fun OrbitApp(
             }
         },
         bottomBar = {
-            val inEntryFlow = currentRoute == CheckInRoutes.LOG || currentRoute?.startsWith("context/") == true
-            if (!inEntryFlow) NavigationBar {
+            if (!OrbitNavigation.hidesBottomBar(currentRoute)) NavigationBar {
                 destinations.forEach { destination ->
                     val selected = currentRoute == destination.route
                     NavigationBarItem(
@@ -204,14 +178,8 @@ fun OrbitApp(
                             when (destination) {
                                 OrbitDestination.CheckIn ->
                                     Icon(Icons.Default.Today, contentDescription = null)
-                                OrbitDestination.Activity ->
-                                    Icon(Icons.AutoMirrored.Filled.DirectionsWalk, contentDescription = null)
-                                OrbitDestination.Diet ->
-                                    Icon(Icons.Default.Restaurant, contentDescription = null)
-                                OrbitDestination.Exercise ->
-                                    Icon(Icons.Default.FitnessCenter, contentDescription = null)
-                                OrbitDestination.Use ->
-                                    Icon(Icons.Default.Medication, contentDescription = null)
+                                OrbitDestination.History ->
+                                    Icon(Icons.Default.History, contentDescription = null)
                                 OrbitDestination.Profile ->
                                     Icon(Icons.Default.Person, contentDescription = null)
                             }
@@ -220,10 +188,7 @@ fun OrbitApp(
                             Text(
                                 text = when (destination) {
                                     OrbitDestination.CheckIn -> stringResource(R.string.tab_check_in)
-                                    OrbitDestination.Activity -> stringResource(R.string.tab_activity)
-                                    OrbitDestination.Diet -> stringResource(R.string.tab_diet)
-                                    OrbitDestination.Exercise -> stringResource(R.string.tab_exercise)
-                                    OrbitDestination.Use -> stringResource(R.string.tab_use)
+                                    OrbitDestination.History -> stringResource(R.string.tab_history)
                                     OrbitDestination.Profile -> stringResource(R.string.tab_profile)
                                 },
                             )
@@ -242,10 +207,10 @@ fun OrbitApp(
                 CheckInScreen(
                     viewModel = checkInViewModel,
                     snackbarHostState = snackbarHostState,
-                    onOpenLog = { navController.navigate(CheckInRoutes.LOG) },
+                    onOpenLog = { navController.navigate(OrbitNavigation.CHECK_IN_LOG) },
                 )
             }
-            composable(CheckInRoutes.LOG) {
+            composable(OrbitNavigation.CHECK_IN_LOG) {
                 CheckInLogScreen(
                     viewModel = checkInViewModel,
                     snackbarHostState = snackbarHostState,
@@ -255,7 +220,7 @@ fun OrbitApp(
                         }
                     },
                     onDiscarded = {
-                        navController.popBackStack(OrbitDestination.CheckIn.route, inclusive = false)
+                        navController.popBackStack(OrbitNavigation.entryReturnsTo(), inclusive = false)
                     },
                 )
             }
@@ -292,7 +257,7 @@ fun OrbitApp(
                     },
                     onDiscard = {
                         checkInViewModel.discardEntry {
-                            navController.popBackStack(OrbitDestination.CheckIn.route, inclusive = false)
+                            navController.popBackStack(OrbitNavigation.entryReturnsTo(), inclusive = false)
                         }
                     },
                     discarding = checkInState.isDiscarding,
@@ -399,48 +364,19 @@ fun OrbitApp(
                     onFinished = { navController.popBackStack() },
                 )
             }
-            composable(OrbitDestination.Activity.route) {
-                val viewModel: ActivityViewModel = viewModel(
-                    factory = ActivityViewModel.Factory(
-                        activityRepository = application.activityRepository,
-                        currentMoodStore = application.currentMoodStore,
+            composable(OrbitDestination.History.route) {
+                val historyViewModel: HistoryViewModel = viewModel(
+                    factory = HistoryViewModel.Factory(
+                        historyRepository = application.historyRepository,
+                        journalRepository = application.journalRepository,
                     ),
                 )
-                ActivityScreen(
-                    viewModel = viewModel,
-                    snackbarHostState = snackbarHostState,
+                val trendsViewModel: TrendsViewModel = viewModel(
+                    factory = TrendsViewModel.Factory(application.moodRepository),
                 )
-            }
-            composable(OrbitDestination.Diet.route) {
-                val viewModel: DietViewModel = viewModel(
-                    factory = DietViewModel.Factory(application.dietRepository),
-                )
-                DietScreen(
-                    viewModel = viewModel,
-                    snackbarHostState = snackbarHostState,
-                )
-            }
-            composable(OrbitDestination.Exercise.route) {
-                val viewModel: ExerciseViewModel = viewModel(
-                    factory = ExerciseViewModel.Factory(
-                        repository = application.exerciseRepository,
-                        currentMoodStore = application.currentMoodStore,
-                    ),
-                )
-                ExerciseScreen(
-                    viewModel = viewModel,
-                    snackbarHostState = snackbarHostState,
-                )
-            }
-            composable(OrbitDestination.Use.route) {
-                val viewModel: UseViewModel = viewModel(
-                    factory = UseViewModel.Factory(
-                        repository = application.substanceRepository,
-                        currentMoodStore = application.currentMoodStore,
-                    ),
-                )
-                UseScreen(
-                    viewModel = viewModel,
+                HistoryScreen(
+                    historyViewModel = historyViewModel,
+                    trendsViewModel = trendsViewModel,
                     snackbarHostState = snackbarHostState,
                 )
             }
@@ -454,18 +390,6 @@ fun OrbitApp(
                         moodRepository = application.moodRepository,
                     ),
                 )
-                val journalViewModel: JournalViewModel = viewModel(
-                    factory = JournalViewModel.Factory(application.journalRepository),
-                )
-                val historyViewModel: HistoryViewModel = viewModel(
-                    factory = HistoryViewModel.Factory(
-                        historyRepository = application.historyRepository,
-                        journalRepository = application.journalRepository,
-                    ),
-                )
-                val trendsViewModel: TrendsViewModel = viewModel(
-                    factory = TrendsViewModel.Factory(application.moodRepository),
-                )
                 val healthConnectViewModel: HealthConnectViewModel = viewModel(
                     factory = HealthConnectViewModel.Factory(
                         biometricRepository = application.biometricRepository,
@@ -474,13 +398,34 @@ fun OrbitApp(
                 )
                 ProfileScreen(
                     listsViewModel = listsViewModel,
-                    trustedContactsViewModel = trustedContactsViewModel,
-                    journalViewModel = journalViewModel,
-                    historyViewModel = historyViewModel,
-                    trendsViewModel = trendsViewModel,
                     healthConnectViewModel = healthConnectViewModel,
                     snackbarHostState = snackbarHostState,
                 )
+            }
+            composable(OrbitNavigation.STATUS_REQUEST) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 24.dp)
+                        .padding(top = 16.dp, bottom = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    TrustedContactsSection(
+                        viewModel = trustedContactsViewModel,
+                        snackbarHostState = snackbarHostState,
+                    )
+                }
+            }
+            OrbitNavigation.retiredTopLevelRoutes.forEach { retiredRoute ->
+                composable(retiredRoute) {
+                    LaunchedEffect(retiredRoute) {
+                        navController.navigate(OrbitNavigation.entryReturnsTo()) {
+                            popUpTo(OrbitNavigation.entryReturnsTo()) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
+                }
             }
         }
     }
@@ -490,9 +435,9 @@ fun OrbitApp(
  * Returns to check-in and drops the finished context screens so Back does not reopen them.
  */
 private fun NavController.leaveContextWorkflow() {
-    val left = popBackStack(OrbitDestination.CheckIn.route, inclusive = false)
+    val left = popBackStack(OrbitNavigation.entryReturnsTo(), inclusive = false)
     if (!left) {
-        navigate(OrbitDestination.CheckIn.route) {
+        navigate(OrbitNavigation.entryReturnsTo()) {
             launchSingleTop = true
         }
     }

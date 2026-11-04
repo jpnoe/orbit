@@ -1,6 +1,7 @@
 <resources>
     <string name="app_name">Orbit</string>
-    <string name="check_in_title">Mood</string>
+    <string name="check_in_title">Log</string>
+    <string name="latest_check_in">Latest</string>
     <string name="trends_title">Mood Trends</string>
     <string name="mood_label">How are you feeling?</string>
     <string name="mood_note_optional">Note (optional)</string>
@@ -44,8 +45,7 @@
     <string name="check_in_clear_axis">Clear</string>
     <string name="check_in_no_axes">No check-in scales are enabled.</string>
     <string name="journal_saved">Journal saved</string>
-    <string name="mood_logs_today">%1$d mood logs today</string>
-    <string name="tab_check_in">Mood</string>
+    <string name="tab_check_in">Log</string>
     <string name="tab_activity">Activity</string>
     <string name="tab_diet">Diet</string>
     <string name="tab_exercise">Workout</string>
@@ -93,7 +93,7 @@
     <string name="notification_body">Log today\'s mood, activity, workout, diet, and usage — as many entries as you need.</string>
     <string name="daily_guide_title">Evening wrap-up</string>
     <string name="daily_guide_step">%1$s · %2$d of %3$d</string>
-    <string name="daily_guide_hint">Log as many entries as you want on this screen, then continue.</string>
+    <string name="daily_guide_hint">Log records the day. History keeps what you saved. Profile holds your lists and settings.</string>
     <string name="daily_guide_continue">Continue</string>
     <string name="daily_guide_done">Done</string>
     <string name="daily_guide_exit">Exit wrap-up</string>
@@ -205,11 +205,12 @@
     <string name="edit_use_title">Edit Use Entry</string>
 
     <string name="history_title">History</string>
-    <string name="history_subtitle">Tap an entry to edit. Long-press to delete. Mood, sleep, meals, workouts, use, and activity — last 14 days.</string>
     <string name="history_tab_log">History</string>
     <string name="history_tab_trends">Mood Trends</string>
     <string name="history_empty">Nothing logged yet. Check-ins, meals, and workouts will show up here.</string>
     <string name="history_mood">Mood %1$d</string>
+    <string name="history_interval_wakeup">Wakeup</string>
+    <string name="history_interval_range">%1$s – %2$s</string>
     <string name="history_activity_active">%1$s: TBD (in progress)</string>
     <string name="history_activity_done">%1$s: %2$s -> %3$s</string>
     <string name="history_meal">%1$s · %2$dg</string>

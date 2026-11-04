@@ -38,6 +38,8 @@ class InMemoryCheckInDao : CheckInDao {
     override suspend fun getValuesForCheckIn(checkInId: String): List<CheckInAxisValue> =
         values.filter { it.checkInId == checkInId }
 
+    override fun observeAxisValues(): Flow<List<CheckInAxisValue>> = MutableStateFlow(values.toList())
+
     override suspend fun getLatest(): CheckInRecord? =
         checkIns.values.maxByOrNull { it.recordedAt }
 
@@ -211,6 +213,27 @@ class InMemoryCheckInDao : CheckInDao {
     override suspend fun insertMealFoods(foods: List<CheckInMealFoodItem>) {
         mealFoods.value = mealFoods.value + foods
     }
+
+    override fun observeCheckInsBetween(startMillis: Long, endMillis: Long): Flow<List<CheckInRecord>> =
+        MutableStateFlow(
+            checkIns.values
+                .filter { it.recordedAt in startMillis..endMillis }
+                .sortedWith(compareByDescending<CheckInRecord> { it.recordedAt }.thenByDescending { it.id }),
+        )
+
+    override fun observeContextWindows(): Flow<List<CheckInContextWindow>> = windows.map { it.values.toList() }
+
+    override fun observeContextCategories(): Flow<List<CheckInContextCategory>> = categories
+
+    override fun observeActivityItems(): Flow<List<CheckInActivityItem>> = activityItems
+
+    override fun observeWorkoutItems(): Flow<List<CheckInWorkoutItem>> = workoutItems
+
+    override fun observeUsageItems(): Flow<List<CheckInUsageItem>> = usageItems
+
+    override fun observeMeals(): Flow<List<CheckInMeal>> = meals
+
+    override fun observeMealFoods(): Flow<List<CheckInMealFoodItem>> = mealFoods
 
     private fun List<CheckInMeal>.forCheckIn(checkInId: String): List<CheckInMeal> =
         filter { it.checkInId == checkInId }.sortedWith(compareBy<CheckInMeal> { it.sortOrder }.thenBy { it.id })

@@ -125,6 +125,7 @@ class OrbitApplication : Application() {
             workoutEventDao = database.workoutEventDao(),
             substanceUseEventDao = database.substanceUseEventDao(),
             sleepEventDao = database.sleepEventDao(),
+            checkInDao = database.checkInDao(),
         )
         val summaryBuilder = StatusSummaryBuilder(
             moodSampleDao = database.moodSampleDao(),

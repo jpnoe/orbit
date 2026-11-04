@@ -40,6 +40,8 @@ class CheckInRepository(
     suspend fun getValuesForCheckIn(checkInId: String): List<CheckInAxisValue> =
         dao.getValuesForCheckIn(checkInId)
 
+    fun observeAxisValues(): Flow<List<CheckInAxisValue>> = dao.observeAxisValues()
+
     suspend fun getLatestCheckIn(): CheckInRecord? = dao.getLatest()
 
     fun observeContextWindow(checkInId: String): Flow<CheckInContextWindow?> =

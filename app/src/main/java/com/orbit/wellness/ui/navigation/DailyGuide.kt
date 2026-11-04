@@ -21,13 +21,7 @@ import androidx.compose.ui.unit.dp
 import com.orbit.wellness.R
 
 object DailyGuide {
-    val steps = listOf(
-        OrbitDestination.CheckIn,
-        OrbitDestination.Activity,
-        OrbitDestination.Exercise,
-        OrbitDestination.Diet,
-        OrbitDestination.Use,
-    )
+    val steps = OrbitNavigation.topLevel
 
     fun indexOf(route: String?): Int {
         if (route == null) return -1
@@ -112,9 +106,6 @@ fun DailyGuideBanner(
 
 private fun stepLabelRes(destination: OrbitDestination): Int = when (destination) {
     OrbitDestination.CheckIn -> R.string.tab_check_in
-    OrbitDestination.Activity -> R.string.tab_activity
-    OrbitDestination.Exercise -> R.string.tab_exercise
-    OrbitDestination.Diet -> R.string.tab_diet
-    OrbitDestination.Use -> R.string.tab_use
+    OrbitDestination.History -> R.string.tab_history
     OrbitDestination.Profile -> R.string.tab_profile
 }

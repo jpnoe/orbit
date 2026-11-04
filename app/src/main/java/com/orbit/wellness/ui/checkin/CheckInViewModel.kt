@@ -17,9 +17,10 @@ import com.orbit.wellness.data.local.CheckInAxis
 import com.orbit.wellness.data.local.CheckInContextWindow
 import com.orbit.wellness.data.local.CheckInRecord
 import com.orbit.wellness.data.local.DefaultCheckInAxes
+import com.orbit.wellness.data.local.MoodSample
+import kotlinx.coroutines.flow.combine
 import com.orbit.wellness.ui.context.PendingCheckInSession
 import com.orbit.wellness.data.local.EmotionOption
-import com.orbit.wellness.data.local.MoodSample
 import com.orbit.wellness.util.DateUtils
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -49,8 +50,6 @@ data class CheckInUiState(
     val newEmotionName: String = "",
     val isSaving: Boolean = false,
     val isDiscarding: Boolean = false,
-    val todaySampleCount: Int = 0,
-    val todaySamples: List<MoodSample> = emptyList(),
     val loggedAtMillis: Long = System.currentTimeMillis(),
     val hasLoggedSleepToday: Boolean = false,
     val sleepLoaded: Boolean = false,
@@ -60,6 +59,13 @@ data class CheckInUiState(
     val isSavingSleep: Boolean = false,
     /** True when bedtime/wake were seeded from Health Connect and not yet saved. */
     val sleepPrefillFromHealthConnect: Boolean = false,
+    val latestMood: Int? = null,
+    val latestEmotion: String = "",
+    val latestEnergy: Int? = null,
+    val latestConfidence: Int? = null,
+    val latestAnxiety: Int? = null,
+    val hasLatestCheckIn: Boolean = false,
+    val latestLoaded: Boolean = false,
 )
 
 private fun defaultBedtimeMillis(): Long {
@@ -120,12 +126,40 @@ class CheckInViewModel(
             }
         }
         viewModelScope.launch {
-            moodRepository.observeTodaySamples().collect { samples ->
-                val checkIns = samples.filter { it.source == MoodSample.SOURCE_CHECK_IN }
+            combine(
+                checkInRepository.observeRecentCheckIns(1),
+                checkInRepository.observeAxisValues(),
+                moodRepository.observeBySource(MoodSample.SOURCE_CHECK_IN),
+            ) { checkIns, axisValues, moods ->
+                val latest = checkIns.firstOrNull()
+                if (latest == null) {
+                    CheckInUiState()
+                } else {
+                    val scores = axisValues
+                        .filter { it.checkInId == latest.id }
+                        .associate { it.axisId to it.value }
+                    val mood = moods.firstOrNull {
+                        it.recordedAt == latest.recordedAt && it.localDate == latest.localDate
+                    }
+                    CheckInUiState(
+                        latestMood = scores[DefaultCheckInAxes.MOOD] ?: mood?.moodScore,
+                        latestEmotion = mood?.emotion.orEmpty(),
+                        latestEnergy = scores[DefaultCheckInAxes.ENERGY],
+                        latestConfidence = scores[DefaultCheckInAxes.CONFIDENCE],
+                        latestAnxiety = scores[DefaultCheckInAxes.ANXIETY],
+                        hasLatestCheckIn = true,
+                    )
+                }
+            }.collect { latest ->
                 _uiState.update {
                     it.copy(
-                        todaySampleCount = checkIns.size,
-                        todaySamples = checkIns,
+                        latestMood = latest.latestMood,
+                        latestEmotion = latest.latestEmotion,
+                        latestEnergy = latest.latestEnergy,
+                        latestConfidence = latest.latestConfidence,
+                        latestAnxiety = latest.latestAnxiety,
+                        hasLatestCheckIn = latest.hasLatestCheckIn,
+                        latestLoaded = true,
                     )
                 }
             }
@@ -408,12 +442,6 @@ class CheckInViewModel(
 
     private fun explicitInputs(current: CheckInUiState) = CheckInDrafts.toAxisInputs(current.axisDrafts)
         .filter { it.axisId in current.enabledAxes.map { axis -> axis.id }.toSet() }
-
-    fun updateMood(sample: MoodSample, newScore: Int, newNote: String) {
-        viewModelScope.launch {
-            moodRepository.updateMood(sample, newScore, newNote)
-        }
-    }
 
     private fun resetDraft() {
         pending = null

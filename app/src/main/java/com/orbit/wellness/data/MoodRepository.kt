@@ -30,6 +30,8 @@ class MoodRepository(
 
     fun observeEmotionOptions(): Flow<List<EmotionOption>> = emotionDao.observeAll()
 
+    fun observeBySource(source: String): Flow<List<MoodSample>> = dao.observeBySource(source)
+
     suspend fun addCustomEmotion(name: String): Result<Unit> {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) {
