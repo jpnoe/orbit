@@ -213,7 +213,10 @@ fun OrbitApp(
                 CheckInScreen(
                     viewModel = checkInViewModel,
                     snackbarHostState = snackbarHostState,
-                    onOpenLog = { navController.navigate(OrbitNavigation.CHECK_IN_LOG) },
+                    onOpenLog = {
+                        checkInViewModel.beginEntry()
+                        navController.navigate(OrbitNavigation.CHECK_IN_LOG)
+                    },
                 )
             }
             composable(OrbitNavigation.CHECK_IN_LOG) {
@@ -375,6 +378,7 @@ fun OrbitApp(
                     factory = HistoryViewModel.Factory(
                         historyRepository = application.historyRepository,
                         journalRepository = application.journalRepository,
+                        checkInRepository = application.checkInRepository,
                     ),
                 )
                 val trendsViewModel: TrendsViewModel = viewModel(

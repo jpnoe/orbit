@@ -14,6 +14,9 @@ interface MoodSampleDao {
     @Update
     suspend fun update(sample: MoodSample)
 
+    @Query("SELECT * FROM mood_samples WHERE id = :id")
+    suspend fun getById(id: String): MoodSample?
+
     @Query("DELETE FROM mood_samples WHERE id = :id")
     suspend fun deleteById(id: String)
 

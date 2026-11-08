@@ -13,6 +13,8 @@ import com.orbit.wellness.data.local.SleepEvent
 import com.orbit.wellness.data.local.SleepEventDao
 import com.orbit.wellness.data.local.SubstanceUseEvent
 import com.orbit.wellness.data.local.SubstanceUseEventDao
+import com.orbit.wellness.data.local.WearableObservation
+import com.orbit.wellness.data.local.WearableObservationDao
 import com.orbit.wellness.data.local.WorkoutEvent
 import com.orbit.wellness.data.local.WorkoutEventDao
 import com.orbit.wellness.util.DateUtils
@@ -88,6 +90,8 @@ sealed class HistoryItem {
         val meals: List<String>,
         val usage: List<String>,
         val moodSampleId: String?,
+        /** Wearable rows contained in this interval. Not part of the check-in state. */
+        val wearables: List<WearableObservation> = emptyList(),
     ) : HistoryItem() {
         override val timestamp: Long get() = recordedAt
         override val id: String get() = "check-in-$checkInId"
@@ -103,6 +107,7 @@ class HistoryRepository(
     private val substanceUseEventDao: SubstanceUseEventDao,
     private val sleepEventDao: SleepEventDao,
     private val checkInDao: CheckInDao,
+    private val wearableObservationDao: WearableObservationDao,
 ) {
     fun observeRecentHistory(daysBack: Long = 14): Flow<List<HistoryItem>> {
         val today = LocalDate.now()
@@ -266,7 +271,12 @@ class HistoryRepository(
         ) { workouts, usage, meals, foods ->
             IntervalDetails(workouts, usage, meals, foods)
         }
-        return combine(recordsFlow, detailsFlow, moods) { records, details, moodSamples ->
+        return combine(
+            recordsFlow,
+            detailsFlow,
+            moods,
+            wearableObservationDao.observeAll(),
+        ) { records, details, moodSamples, wearables ->
             CheckInIntervalHistory.build(
                 checkIns = records.checkIns,
                 windows = records.windows,
@@ -277,7 +287,15 @@ class HistoryRepository(
                 meals = details.meals,
                 foods = details.foods,
                 moods = moodSamples,
-            )
+            ).map { interval ->
+                interval.copy(
+                    wearables = CheckInIntervalWearables.forInterval(
+                        windowStartAt = interval.windowStartAt,
+                        windowEndAt = interval.recordedAt,
+                        observations = wearables,
+                    ),
+                )
+            }
         }
     }
 }

@@ -10,6 +10,7 @@ import com.orbit.wellness.data.ExerciseRepository
 import com.orbit.wellness.data.HistoryRepository
 import com.orbit.wellness.data.JournalRepository
 import com.orbit.wellness.data.MoodRepository
+import com.orbit.wellness.data.MoodSampleClock
 import com.orbit.wellness.data.MoodSampleRemover
 import com.orbit.wellness.data.MoodSampleWriter
 import com.orbit.wellness.data.RoomDatabaseTransaction
@@ -93,6 +94,12 @@ class OrbitApplication : Application() {
             moodSamples = MoodSampleWriter { sample -> database.moodSampleDao().insert(sample) },
             moodRemover = MoodSampleRemover { id -> database.moodSampleDao().deleteById(id) },
             transaction = RoomDatabaseTransaction(database),
+            moodClock = MoodSampleClock { id, recordedAt, localDate ->
+                val sample = database.moodSampleDao().getById(id) ?: return@MoodSampleClock
+                database.moodSampleDao().update(
+                    sample.copy(recordedAt = recordedAt, localDate = localDate),
+                )
+            },
             wakeTimes = { localDate ->
                 database.sleepEventDao().getForDate(localDate)?.wakeTime
             },
@@ -129,6 +136,7 @@ class OrbitApplication : Application() {
             substanceUseEventDao = database.substanceUseEventDao(),
             sleepEventDao = database.sleepEventDao(),
             checkInDao = database.checkInDao(),
+            wearableObservationDao = database.wearableObservationDao(),
         )
         val summaryBuilder = StatusSummaryBuilder(
             moodSampleDao = database.moodSampleDao(),

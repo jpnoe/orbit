@@ -26,6 +26,22 @@ fun interface MoodSampleRemover {
     suspend fun delete(id: String)
 }
 
+/** Moves the legacy mood sample so it stays attached to the check-in end time. */
+fun interface MoodSampleClock {
+    suspend fun move(id: String, recordedAt: Long, localDate: String)
+}
+
+enum class IntervalTimeField {
+    START,
+    END,
+}
+
+sealed interface IntervalTimeAdjustment {
+    data object Updated : IntervalTimeAdjustment
+    data object Missing : IntervalTimeAdjustment
+    data object StartAfterEnd : IntervalTimeAdjustment
+}
+
 data class SavedCheckIn(
     val record: CheckInRecord,
     val legacyMoodSampleId: String? = null,

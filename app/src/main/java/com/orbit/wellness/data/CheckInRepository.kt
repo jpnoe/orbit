@@ -31,6 +31,7 @@ class CheckInRepository(
     private val moodRemover: MoodSampleRemover = MoodSampleRemover { },
     private val transaction: DatabaseTransaction = ImmediateDatabaseTransaction(),
     private val captures: WearableCaptureScheduler = NoWearableCapture,
+    private val moodClock: MoodSampleClock = MoodSampleClock { _, _, _ -> },
     private val wakeTimes: CheckInWakeTimeSource = CheckInWakeTimeSource { null },
 ) {
     fun observeEnabledAxes(): Flow<List<CheckInAxis>> = dao.observeEnabledAxes()
@@ -397,6 +398,44 @@ class CheckInRepository(
             status = status,
             reviewedAt = reportedAt,
         )
+    }
+
+    /**
+     * Replaces one stored bound on an existing check-in.
+     * The other bound, the start basis, and every other check-in stay as they are.
+     * The end remains the check-in's recordedAt, and the legacy mood sample follows it.
+     */
+    suspend fun adjustIntervalTime(
+        checkInId: String,
+        field: IntervalTimeField,
+        millis: Long,
+        moodSampleId: String?,
+    ): IntervalTimeAdjustment {
+        val record = dao.getCheckIn(checkInId) ?: return IntervalTimeAdjustment.Missing
+        val window = dao.getContextWindow(checkInId) ?: return IntervalTimeAdjustment.Missing
+        val newStart = if (field == IntervalTimeField.START) millis else window.windowStartAt
+        val newEnd = if (field == IntervalTimeField.END) millis else window.windowEndAt
+        if (newStart > newEnd) return IntervalTimeAdjustment.StartAfterEnd
+        window.copy(windowStartAt = newStart, windowEndAt = newEnd)
+        val localDate = DateUtils.formatLocalDate(DateUtils.localDateOf(newEnd))
+        transaction.run {
+            dao.updateWindowBounds(
+                checkInId = checkInId,
+                windowStartAt = newStart,
+                windowEndAt = newEnd,
+            )
+            if (newEnd != record.recordedAt || localDate != record.localDate) {
+                dao.updateRecordedAt(
+                    id = checkInId,
+                    recordedAt = newEnd,
+                    localDate = localDate,
+                )
+            }
+            if (field == IntervalTimeField.END && moodSampleId != null) {
+                moodClock.move(moodSampleId, newEnd, localDate)
+            }
+        }
+        return IntervalTimeAdjustment.Updated
     }
 
     companion object {

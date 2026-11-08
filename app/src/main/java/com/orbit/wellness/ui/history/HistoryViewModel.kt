@@ -3,8 +3,11 @@ package com.orbit.wellness.ui.history
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.orbit.wellness.data.CheckInRepository
 import com.orbit.wellness.data.HistoryItem
 import com.orbit.wellness.data.HistoryRepository
+import com.orbit.wellness.data.IntervalTimeAdjustment
+import com.orbit.wellness.data.IntervalTimeField
 import com.orbit.wellness.data.JournalRepository
 import com.orbit.wellness.data.local.ActivityEvent
 import com.orbit.wellness.data.local.MealEvent
@@ -29,11 +32,23 @@ data class HistoryFeedState(
     val isLoading: Boolean = true,
 )
 
+data class IntervalTimeDraft(
+    val item: HistoryItem.CheckInInterval,
+    val field: IntervalTimeField,
+)
+
+enum class IntervalAdjustNotice {
+    START_AFTER_END,
+    MISSING,
+}
+
 data class HistoryUiState(
     val journalNote: String = "",
     val isJournalLoading: Boolean = true,
     val isJournalSaving: Boolean = false,
     val selectedItemForOptions: HistoryItem? = null,
+    val intervalToAdjust: HistoryItem.CheckInInterval? = null,
+    val intervalTimeDraft: IntervalTimeDraft? = null,
     val itemToDelete: HistoryItem? = null,
     val itemToEdit: HistoryItem? = null,
 )
@@ -41,6 +56,7 @@ data class HistoryUiState(
 class HistoryViewModel(
     private val historyRepository: HistoryRepository,
     private val journalRepository: JournalRepository,
+    private val checkInRepository: CheckInRepository,
 ) : ViewModel() {
 
     val feed: StateFlow<HistoryFeedState> = historyRepository.observeRecentHistory()
@@ -56,6 +72,9 @@ class HistoryViewModel(
 
     private val _savedFeedback = Channel<Unit>(Channel.BUFFERED)
     val savedFeedback = _savedFeedback.receiveAsFlow()
+
+    private val _adjustNotices = Channel<IntervalAdjustNotice>(Channel.BUFFERED)
+    val adjustNotices = _adjustNotices.receiveAsFlow()
 
     init {
         viewModelScope.launch {
@@ -90,6 +109,49 @@ class HistoryViewModel(
 
     fun onLongPressItem(item: HistoryItem) {
         _uiState.update { it.copy(selectedItemForOptions = item) }
+    }
+
+    fun onAdjustInterval(item: HistoryItem.CheckInInterval) {
+        _uiState.update { it.copy(intervalToAdjust = item, intervalTimeDraft = null) }
+    }
+
+    fun dismissIntervalOptions() {
+        _uiState.update { it.copy(intervalToAdjust = null) }
+    }
+
+    fun onChooseIntervalTime(field: IntervalTimeField) {
+        val item = _uiState.value.intervalToAdjust ?: return
+        _uiState.update {
+            it.copy(
+                intervalToAdjust = null,
+                intervalTimeDraft = IntervalTimeDraft(item, field),
+            )
+        }
+    }
+
+    fun dismissIntervalTime() {
+        _uiState.update { it.copy(intervalTimeDraft = null) }
+    }
+
+    fun adjustIntervalTime(millis: Long) {
+        val draft = _uiState.value.intervalTimeDraft ?: return
+        viewModelScope.launch {
+            when (
+                checkInRepository.adjustIntervalTime(
+                    checkInId = draft.item.checkInId,
+                    field = draft.field,
+                    millis = millis,
+                    moodSampleId = draft.item.moodSampleId,
+                )
+            ) {
+                IntervalTimeAdjustment.Updated ->
+                    _uiState.update { it.copy(intervalTimeDraft = null) }
+                IntervalTimeAdjustment.StartAfterEnd ->
+                    _adjustNotices.trySend(IntervalAdjustNotice.START_AFTER_END)
+                IntervalTimeAdjustment.Missing ->
+                    _adjustNotices.trySend(IntervalAdjustNotice.MISSING)
+            }
+        }
     }
 
     fun dismissOptions() {
@@ -194,10 +256,11 @@ class HistoryViewModel(
     class Factory(
         private val historyRepository: HistoryRepository,
         private val journalRepository: JournalRepository,
+        private val checkInRepository: CheckInRepository,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return HistoryViewModel(historyRepository, journalRepository) as T
+            return HistoryViewModel(historyRepository, journalRepository, checkInRepository) as T
         }
     }
 }

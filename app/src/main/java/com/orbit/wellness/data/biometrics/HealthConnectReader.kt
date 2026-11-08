@@ -300,8 +300,8 @@ class HealthConnectReader(
         end: Instant,
         notes: MutableList<String>,
     ): List<WearableObservation> {
-        try {
-            val resting = readAllRecords(
+        val resting = try {
+            readAllRecords(
                 client,
                 ReadRecordsRequest(
                     recordType = RestingHeartRateRecord::class,
@@ -309,31 +309,34 @@ class HealthConnectReader(
                 ),
             ).map { restingHeartRate(it, importedAt = end) }
                 .filter { observedInside(it.observedStartAt, start.toEpochMilli(), end.toEpochMilli()) }
-            val latest = resting.maxByOrNull { it.observedStartAt }
-            if (latest != null) return listOf(latest)
+                .maxByOrNull { it.observedStartAt }
         } catch (e: SecurityException) {
             notes += "Resting heart rate: permission denied."
             Log.w(TAG, "Interval resting heart rate security", e)
             return emptyList()
         } catch (e: Exception) {
             Log.w(TAG, "Interval resting heart rate failed", e)
+            null
         }
 
-        try {
+        val average = try {
             val avg = client.aggregate(
                 AggregateRequest(
                     metrics = setOf(HeartRateRecord.BPM_AVG),
                     timeRangeFilter = TimeRangeFilter.between(start, end),
                 ),
             )[HeartRateRecord.BPM_AVG]
-            val average = heartRateAverageOrAbsent(avg, start, end, end)
-            if (average != null) return listOf(average)
+            heartRateAverageOrAbsent(avg, start, end, end)
         } catch (e: SecurityException) {
             notes += "Heart rate: permission denied — re-grant Health Connect access."
             Log.w(TAG, "Interval heart-rate average security", e)
-            return emptyList()
+            if (resting == null) return emptyList() else null
         } catch (e: Exception) {
             Log.w(TAG, "Interval heart-rate average failed", e)
+            null
+        }
+        if (resting != null || average != null) {
+            return listOfNotNull(resting, average)
         }
 
         return try {

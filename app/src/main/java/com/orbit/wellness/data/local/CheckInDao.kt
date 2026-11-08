@@ -71,6 +71,18 @@ interface CheckInDao {
     @Insert
     suspend fun insertCheckIn(record: CheckInRecord)
 
+    @Query("SELECT * FROM check_ins WHERE id = :id")
+    suspend fun getCheckIn(id: String): CheckInRecord?
+
+    @Query(
+        """
+        UPDATE check_ins
+        SET recordedAt = :recordedAt, localDate = :localDate
+        WHERE id = :id
+        """,
+    )
+    suspend fun updateRecordedAt(id: String, recordedAt: Long, localDate: String)
+
     @Query("DELETE FROM check_ins WHERE id = :checkInId")
     suspend fun deleteCheckIn(checkInId: String)
 
@@ -111,6 +123,15 @@ interface CheckInDao {
         """,
     )
     suspend fun getContextWindow(checkInId: String): CheckInContextWindow?
+
+    @Query(
+        """
+        UPDATE check_in_context_windows
+        SET windowStartAt = :windowStartAt, windowEndAt = :windowEndAt
+        WHERE checkInId = :checkInId
+        """,
+    )
+    suspend fun updateWindowBounds(checkInId: String, windowStartAt: Long, windowEndAt: Long)
 
     @Query(
         """

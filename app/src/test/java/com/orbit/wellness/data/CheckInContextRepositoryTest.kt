@@ -195,6 +195,87 @@ class CheckInContextRepositoryTest {
     }
 
     @Test
+    fun adjustingTimesUpdatesOnlyThatEntry() {
+        val dao = InMemoryCheckInDao()
+        val moved = mutableListOf<Triple<String, Long, String>>()
+        val repository = CheckInRepository(
+            dao = dao,
+            moodClock = MoodSampleClock { id, recordedAt, date ->
+                moved += Triple(id, recordedAt, date)
+            },
+            wakeTimes = { _ -> wake },
+        )
+        val atThree = DateUtils.atTimeMillis(day, 15, 0)
+        val atEleven = DateUtils.atTimeMillis(day, 11, 0)
+        val atNine = DateUtils.atTimeMillis(day, 9, 0)
+        runBlocking {
+            repository.saveCheckIn(
+                axisValues = listOf(CheckInAxisInput(DefaultCheckInAxes.MOOD, 6)),
+                trigger = "manual",
+                recordedAt = atTen,
+                localDate = localDate,
+                id = "ten",
+                completedAt = atTen + 5,
+            )
+            repository.saveCheckIn(
+                axisValues = listOf(CheckInAxisInput(DefaultCheckInAxes.MOOD, 4)),
+                trigger = "manual",
+                recordedAt = atThree,
+                localDate = localDate,
+                id = "three",
+            )
+        }
+        val beforeNeighbor = runBlocking { repository.getContextWindow("three") }!!
+        val endResult = runBlocking {
+            repository.adjustIntervalTime(
+                checkInId = "ten",
+                field = IntervalTimeField.END,
+                millis = atEleven,
+                moodSampleId = "mood-ten",
+            )
+        }
+        assertEquals(IntervalTimeAdjustment.Updated, endResult)
+        val afterEnd = runBlocking { repository.getContextWindow("ten") }!!
+        assertEquals(wake, afterEnd.windowStartAt)
+        assertEquals(atEleven, afterEnd.windowEndAt)
+        assertEquals(CheckInContextStartBasis.WAKE_TIME, afterEnd.startBasis)
+        assertNull(afterEnd.previousCheckInId)
+        assertEquals(atTen + 5, afterEnd.completedAt)
+        assertEquals(atEleven, runBlocking { dao.getCheckIn("ten") }!!.recordedAt)
+        assertEquals(localDate, runBlocking { dao.getCheckIn("ten") }!!.localDate)
+        assertEquals(listOf(Triple("mood-ten", atEleven, localDate)), moved)
+        assertEquals(beforeNeighbor, runBlocking { repository.getContextWindow("three") })
+
+        val startResult = runBlocking {
+            repository.adjustIntervalTime(
+                checkInId = "ten",
+                field = IntervalTimeField.START,
+                millis = atNine,
+                moodSampleId = "mood-ten",
+            )
+        }
+        assertEquals(IntervalTimeAdjustment.Updated, startResult)
+        val afterStart = runBlocking { repository.getContextWindow("ten") }!!
+        assertEquals(atNine, afterStart.windowStartAt)
+        assertEquals(atEleven, afterStart.windowEndAt)
+        assertEquals(CheckInContextStartBasis.WAKE_TIME, afterStart.startBasis)
+        assertEquals(1, moved.size)
+
+        val rejected = runBlocking {
+            repository.adjustIntervalTime(
+                checkInId = "ten",
+                field = IntervalTimeField.END,
+                millis = atNine - 1,
+                moodSampleId = "mood-ten",
+            )
+        }
+        assertEquals(IntervalTimeAdjustment.StartAfterEnd, rejected)
+        assertEquals(afterStart, runBlocking { repository.getContextWindow("ten") })
+        assertEquals(atEleven, runBlocking { dao.getCheckIn("ten") }!!.recordedAt)
+        assertEquals(1, moved.size)
+    }
+
+    @Test
     fun activityWritesRequireAContextWindow() {
         val repository = CheckInRepository(InMemoryCheckInDao())
         val error = assertThrows(IllegalArgumentException::class.java) {

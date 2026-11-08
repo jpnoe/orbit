@@ -250,6 +250,20 @@ class CheckInViewModel(
         }
     }
 
+    /**
+     * Starts a mood entry at the current time.
+     * An in-progress draft keeps the time already on screen, including one the user edited.
+     */
+    fun beginEntry() {
+        val current = _uiState.value
+        val draftInProgress = pending != null ||
+            current.axisDrafts.values.any { it != null } ||
+            current.moodNote.isNotBlank() ||
+            current.selectedEmotion.isNotBlank()
+        if (draftInProgress) return
+        _uiState.update { it.copy(loggedAtMillis = System.currentTimeMillis()) }
+    }
+
     /** Move the mood visual anchor. Does not mark mood as set. */
     fun syncFromCommitted() {
         _uiState.update { it.copy(moodAnchor = currentMoodStore.committedMood.value) }

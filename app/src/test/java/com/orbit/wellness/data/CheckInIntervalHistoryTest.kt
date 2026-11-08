@@ -11,10 +11,13 @@ import com.orbit.wellness.data.local.CheckInRecord
 import com.orbit.wellness.data.local.CheckInUsageItem
 import com.orbit.wellness.data.local.CheckInWorkoutItem
 import com.orbit.wellness.data.local.MoodSample
+import com.orbit.wellness.util.DateUtils
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.LocalDate
+import java.time.ZoneId
 
 class CheckInIntervalHistoryTest {
     private val day = "2026-11-03"
@@ -255,6 +258,47 @@ class CheckInIntervalHistoryTest {
         ).single()
         assertEquals(4, legacy.moodScore)
         assertEquals("Calm", legacy.emotion)
+    }
+
+    @Test
+    fun aCorrectedDayStartShowsTheStoredClockTime() {
+        val zone = ZoneId.systemDefault()
+        val date = LocalDate.of(2026, 11, 3)
+        val midnight = DateUtils.atTimeMillis(date, 0, 0)
+        val morning = DateUtils.atTimeMillis(date, 8, 0)
+        val end = DateUtils.atTimeMillis(date, 10, 0)
+        assertTrue(
+            CheckInIntervalHistory.usesWakeupLabel(
+                CheckInContextStartBasis.DAY_START,
+                midnight,
+                end,
+                zone,
+            ),
+        )
+        assertTrue(
+            !CheckInIntervalHistory.usesWakeupLabel(
+                CheckInContextStartBasis.DAY_START,
+                morning,
+                end,
+                zone,
+            ),
+        )
+        assertTrue(
+            !CheckInIntervalHistory.usesWakeupLabel(
+                CheckInContextStartBasis.WAKE_TIME,
+                midnight,
+                end,
+                zone,
+            ),
+        )
+        assertTrue(
+            CheckInIntervalHistory.usesWakeupLabel(
+                CheckInContextStartBasis.DAY_START,
+                null,
+                end,
+                zone,
+            ),
+        )
     }
 
     private fun checkIn(id: String, at: Long) = CheckInRecord(

@@ -54,6 +54,16 @@ class InMemoryCheckInDao : CheckInDao {
 
     override suspend fun insertAxes(axes: List<CheckInAxis>) = Unit
 
+    override suspend fun getCheckIn(id: String): CheckInRecord? = checkIns[id]
+
+    override suspend fun updateRecordedAt(id: String, recordedAt: Long, localDate: String) {
+        val current = checkIns[id] ?: return
+        val updated = current.copy(recordedAt = recordedAt, localDate = localDate)
+        checkIns[id] = updated
+        if (inserted?.id == id) inserted = updated
+        publishCheckIns()
+    }
+
     override suspend fun insertCheckIn(record: CheckInRecord) {
         checkIns[record.id] = record
         inserted = record
@@ -92,6 +102,13 @@ class InMemoryCheckInDao : CheckInDao {
 
     override suspend fun getContextWindow(checkInId: String): CheckInContextWindow? =
         windows.value[checkInId]
+
+    override suspend fun updateWindowBounds(checkInId: String, windowStartAt: Long, windowEndAt: Long) {
+        val current = windows.value[checkInId] ?: return
+        windows.value = windows.value + (
+            checkInId to current.copy(windowStartAt = windowStartAt, windowEndAt = windowEndAt)
+            )
+    }
 
     override fun observeContextCategories(checkInId: String): Flow<List<CheckInContextCategory>> =
         categories.map { rows -> rows.filter { it.checkInId == checkInId } }

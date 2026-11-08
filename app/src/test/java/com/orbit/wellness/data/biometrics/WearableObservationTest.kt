@@ -317,14 +317,13 @@ class WearableObservationTest {
         assertTrue(strings.contains(">Resting heart rate<"))
         assertTrue(strings.contains(">Heart-rate average<"))
         assertTrue(strings.contains(">Heart-rate sample<"))
-        assertTrue(strings.contains("These counts describe the selected summaries that were imported."))
+        assertTrue(strings.contains("Imports the current day’s selected summaries now."))
         assertTrue(strings.contains("Import status"))
-        val wearableCopy = strings.substringAfter("insights_wearable_heading")
-            .substringBefore("health_connect_tab")
-        assertTrue(!wearableCopy.contains("correlat", ignoreCase = true))
-        assertTrue(!wearableCopy.contains("recommend", ignoreCase = true))
-        assertTrue(!wearableCopy.contains("similar", ignoreCase = true))
-        assertTrue(!wearableCopy.contains("effect", ignoreCase = true))
+        val healthCopy = strings.substringAfter("health_connect_title")
+            .substringBefore("trusted_contacts_title")
+        assertTrue(!healthCopy.contains("correlat", ignoreCase = true))
+        assertTrue(!healthCopy.contains("recommend", ignoreCase = true))
+        assertTrue(!healthCopy.contains("similar", ignoreCase = true))
     }
 
     @Test

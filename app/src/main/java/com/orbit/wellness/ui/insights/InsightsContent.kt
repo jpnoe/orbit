@@ -21,7 +21,8 @@ data class CoreAxisCoverage(
 )
 
 /**
- * Counts the Insights screen can show. This describes the projection.
+ * Diagnostic counts kept for engineering validation.
+ * The Insights screen does not show this projection.
  * It does not score the person or decide that the data is good enough.
  */
 data class InsightsContent(

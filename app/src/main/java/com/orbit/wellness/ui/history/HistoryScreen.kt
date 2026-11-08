@@ -37,9 +37,11 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -47,23 +49,28 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.orbit.wellness.R
+import com.orbit.wellness.data.CheckInIntervalHistory
 import com.orbit.wellness.data.HistoryItem
+import com.orbit.wellness.data.IntervalTimeField
 import com.orbit.wellness.data.local.DefaultCheckInAxes
 import com.orbit.wellness.ui.checkin.checkInAxisLine
 import com.orbit.wellness.ui.checkin.checkInEmotionLine
 import com.orbit.wellness.ui.checkin.checkInMoodLine
 import com.orbit.wellness.data.local.ActivityEvent
-import com.orbit.wellness.data.local.CheckInContextStartBasis
 import com.orbit.wellness.data.local.MealEvent
 import com.orbit.wellness.data.local.MoodSample
 import com.orbit.wellness.data.local.SleepEvent
 import com.orbit.wellness.data.local.SubstanceIntent
 import com.orbit.wellness.data.local.SubstanceUseEvent
 import com.orbit.wellness.data.local.WorkoutEvent
+import com.orbit.wellness.data.historyWearableAmount
 import com.orbit.wellness.ui.trends.TrendsScreen
+import com.orbit.wellness.ui.wearable.wearableMetricLabelRes
 import com.orbit.wellness.ui.trends.TrendsViewModel
 import com.orbit.wellness.ui.util.CollectSavedFeedback
 import com.orbit.wellness.ui.util.InlineLoading
+import com.orbit.wellness.ui.util.LoggedAtField
+import com.orbit.wellness.ui.util.showBriefMessage
 import com.orbit.wellness.util.DateUtils
 import com.orbit.wellness.util.VolumeUnits
 import kotlin.math.roundToInt
@@ -89,11 +96,22 @@ fun HistoryScreen(
     var selectedTab by remember { mutableStateOf(HistoryTab.LOG) }
     val showTrendsTab = trendsUiState.hasEnoughData
 
+    val adjustOrder = stringResource(R.string.history_adjust_order)
+    val adjustMissing = stringResource(R.string.history_adjust_missing)
     CollectSavedFeedback(
         pulses = historyViewModel.savedFeedback,
         message = journalSaved,
         snackbarHostState = snackbarHostState,
     )
+    LaunchedEffect(historyViewModel, snackbarHostState, adjustOrder, adjustMissing) {
+        historyViewModel.adjustNotices.collect { notice ->
+            val message = when (notice) {
+                IntervalAdjustNotice.START_AFTER_END -> adjustOrder
+                IntervalAdjustNotice.MISSING -> adjustMissing
+            }
+            snackbarHostState.showBriefMessage(message)
+        }
+    }
 
     Column(
         modifier = modifier.fillMaxSize(),
@@ -162,7 +180,13 @@ fun HistoryScreen(
                                 HistoryItemCard(
                                     item = item,
                                     onClick = { if (editable) historyViewModel.onSelectEdit(item) },
-                                    onLongClick = { if (editable) historyViewModel.onLongPressItem(item) },
+                                    onLongClick = {
+                                        if (item is HistoryItem.CheckInInterval) {
+                                            historyViewModel.onAdjustInterval(item)
+                                        } else if (editable) {
+                                            historyViewModel.onLongPressItem(item)
+                                        }
+                                    },
                                 )
                             }
                         }
@@ -221,6 +245,60 @@ fun HistoryScreen(
                 }
             }
         }
+    }
+
+    uiState.intervalToAdjust?.let { item ->
+        ModalBottomSheet(
+            onDismissRequest = historyViewModel::dismissIntervalOptions,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp)
+                    .padding(bottom = 32.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.history_adjust_times),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    text = intervalRangeLabel(item),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedButton(
+                    onClick = { historyViewModel.onChooseIntervalTime(IntervalTimeField.START) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.history_adjust_start))
+                }
+                OutlinedButton(
+                    onClick = { historyViewModel.onChooseIntervalTime(IntervalTimeField.END) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.history_adjust_end))
+                }
+            }
+        }
+    }
+
+    uiState.intervalTimeDraft?.let { draft ->
+        val initialMillis = when (draft.field) {
+            IntervalTimeField.START -> draft.item.windowStartAt ?: draft.item.recordedAt
+            IntervalTimeField.END -> draft.item.recordedAt
+        }
+        AdjustIntervalTimeSheet(
+            title = stringResource(
+                when (draft.field) {
+                    IntervalTimeField.START -> R.string.history_adjust_start_title
+                    IntervalTimeField.END -> R.string.history_adjust_end_title
+                },
+            ),
+            initialMillis = initialMillis,
+            onConfirm = historyViewModel::adjustIntervalTime,
+            onDismiss = historyViewModel::dismissIntervalTime,
+        )
     }
 
     // Delete confirmation dialog
@@ -309,6 +387,7 @@ private fun HistoryItemCard(
     onLongClick: () -> Unit,
 ) {
     val editable = item !is HistoryItem.CheckInInterval
+    val adjustable = item is HistoryItem.CheckInInterval
     val timeLabel = when (item) {
         is HistoryItem.CheckInInterval -> intervalRangeLabel(item)
         is HistoryItem.Sleep ->
@@ -323,7 +402,7 @@ private fun HistoryItemCard(
         modifier = Modifier
             .fillMaxWidth()
             .then(
-                if (editable) {
+                if (editable || adjustable) {
                     Modifier.combinedClickable(
                         onClick = onClick,
                         onLongClick = onLongClick,
@@ -501,7 +580,12 @@ private fun HistoryItemCard(
 @Composable
 private fun intervalRangeLabel(item: HistoryItem.CheckInInterval): String {
     val start = item.windowStartAt
-    return if (item.startBasis == CheckInContextStartBasis.DAY_START || start == null) {
+    val wakeup = start == null || CheckInIntervalHistory.usesWakeupLabel(
+        startBasis = item.startBasis,
+        windowStartAt = start,
+        recordedAt = item.recordedAt,
+    )
+    return if (wakeup) {
         DateUtils.wakeupRangeLabel(
             startMillis = start,
             endMillis = item.recordedAt,
@@ -543,11 +627,20 @@ private fun CheckInIntervalBody(item: HistoryItem.CheckInInterval) {
     if (item.note.isNotBlank()) {
         Text(text = item.note, style = MaterialTheme.typography.bodyMedium)
     }
+    val wearableLines = mutableListOf<String>()
+    for (observation in item.wearables) {
+        wearableLines += stringResource(
+            R.string.history_wearable_line,
+            stringResource(wearableMetricLabelRes(observation.metric)),
+            historyWearableAmount(observation),
+        )
+    }
     val sections = listOf(
         R.string.tab_activity to item.activities,
         R.string.tab_exercise to item.workouts,
         R.string.tab_diet to item.meals,
         R.string.tab_use to item.usage,
+        R.string.history_wearable_heading to wearableLines,
     ).filter { (_, lines) -> lines.isNotEmpty() }
     if (sections.isNotEmpty()) {
         Row(
@@ -569,6 +662,47 @@ private fun CheckInIntervalBody(item: HistoryItem.CheckInInterval) {
                         spacedFromPrevious = index > 0,
                     )
                 }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AdjustIntervalTimeSheet(
+    title: String,
+    initialMillis: Long,
+    onConfirm: (Long) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var millis by remember(initialMillis) { mutableLongStateOf(initialMillis) }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+            )
+            LoggedAtField(
+                millis = millis,
+                onChange = { millis = it },
+            )
+            Button(
+                onClick = { onConfirm(millis) },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.save))
+            }
+            OutlinedButton(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.cancel))
             }
         }
     }

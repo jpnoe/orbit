@@ -4,9 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.orbit.wellness.data.CheckInAnalysisRepository
-import com.orbit.wellness.data.WearableCoverage
 import com.orbit.wellness.data.WearableObservationRepository
-import com.orbit.wellness.data.wearableCoverage
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -16,8 +14,7 @@ sealed interface InsightsUiState {
     data object Loading : InsightsUiState
 
     data class Ready(
-        val content: InsightsContent,
-        val wearable: WearableCoverage,
+        val baseline: InsightsBaseline,
     ) : InsightsUiState
 }
 
@@ -27,11 +24,12 @@ class InsightsViewModel(
 ) : ViewModel() {
     val uiState: StateFlow<InsightsUiState> = combine(
         analysis.observeSnapshot(),
-        wearableObservations.observe(),
-    ) { snapshot, observations ->
+        wearableObservations.observeCoverage(),
+    ) { snapshot, coverage ->
         InsightsUiState.Ready(
-            content = snapshot.toInsightsContent(),
-            wearable = wearableCoverage(observations),
+            baseline = snapshot.toInsightsBaseline(
+                hasWearableObservations = coverage.hasObservations,
+            ),
         )
     }.stateIn(
         scope = viewModelScope,

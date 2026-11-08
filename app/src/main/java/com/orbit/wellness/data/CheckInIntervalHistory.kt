@@ -11,6 +11,8 @@ import com.orbit.wellness.data.local.CheckInRecord
 import com.orbit.wellness.data.local.CheckInUsageItem
 import com.orbit.wellness.data.local.CheckInWorkoutItem
 import com.orbit.wellness.data.local.MoodSample
+import java.time.Instant
+import java.time.ZoneId
 
 /**
  * One saved check-in, shown in history at the mood-log time.
@@ -77,6 +79,23 @@ object CheckInIntervalHistory {
                 moodSampleId = mood?.id,
             )
         }
+    }
+
+    /**
+     * Day-start rows say "Wakeup" only while the stored start is still local midnight.
+     * A corrected start shows that clock time instead.
+     */
+    fun usesWakeupLabel(
+        startBasis: String,
+        windowStartAt: Long?,
+        recordedAt: Long,
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): Boolean {
+        if (windowStartAt == null) return true
+        if (startBasis != CheckInContextStartBasis.DAY_START) return false
+        val endDate = Instant.ofEpochMilli(recordedAt).atZone(zone).toLocalDate()
+        val midnight = endDate.atStartOfDay(zone).toInstant().toEpochMilli()
+        return windowStartAt == midnight
     }
 
     fun absorbedMoodIds(intervals: List<HistoryItem.CheckInInterval>): Set<String> {
