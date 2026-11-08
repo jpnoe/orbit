@@ -12,6 +12,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -68,6 +69,8 @@ private fun ProfileDetail(profile: BehaviorAssociationProfileView) {
     var showSpread by remember(profile.identity) { mutableStateOf(false) }
     var showEmotions by remember(profile.identity) { mutableStateOf(false) }
     var showContext by remember(profile.identity) { mutableStateOf(false) }
+    var showEpisodes by remember(profile.identity) { mutableStateOf(false) }
+    var episodeIndex by remember(profile.identity) { mutableIntStateOf(0) }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(text = profile.displayName, style = MaterialTheme.typography.titleLarge)
         Text(text = profile.kindLabel, style = MaterialTheme.typography.bodyLarge)
@@ -110,6 +113,12 @@ private fun ProfileDetail(profile: BehaviorAssociationProfileView) {
         }
         if (showContext) {
             ContextBalanceBlock(profile.context)
+        }
+        TextButton(onClick = { showEpisodes = !showEpisodes }) {
+            Text(BehaviorAssociationCopy.EXPOSURE_EPISODES)
+        }
+        if (showEpisodes) {
+            ExposureEpisodeBlock(profile.episodes, episodeIndex) { episodeIndex = it }
         }
     }
 }
@@ -217,6 +226,42 @@ private fun ContextGroupBlock(side: String, group: ContextGroupPresentation) {
 @Composable
 private fun ContextLine(label: String, value: String?) {
     Text("$label ${value ?: BehaviorAssociationCopy.NOT_ENOUGH_DATA}")
+}
+
+@Composable
+private fun ExposureEpisodeBlock(
+    episodes: ExposureEpisodesPresentation,
+    episodeIndex: Int,
+    onSelect: (Int) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(episodes.notice, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Episodes ${episodes.episodeCount}")
+        if (episodes.presenceContrastNote != null) Text(episodes.presenceContrastNote)
+        if (episodes.emptyPresentNote != null) Text(episodes.emptyPresentNote)
+        val episode = episodes.episodes.getOrNull(episodeIndex)
+        if (episode != null) {
+            if (episodes.episodes.size > 1) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { onSelect((episodeIndex - 1).coerceAtLeast(0)) }) {
+                        Text("Previous episode")
+                    }
+                    TextButton(
+                        onClick = { onSelect((episodeIndex + 1).coerceAtMost(episodes.episodes.lastIndex)) },
+                    ) {
+                        Text("Next episode")
+                    }
+                }
+            }
+            Text(episode.title, style = MaterialTheme.typography.titleMedium)
+            Text(episode.coverage)
+            Text(episode.structure)
+            episode.trajectory.forEach { Text(it) }
+            Text(episode.coExposures)
+            Text(episode.breaks)
+            episode.quantities.forEach { Text(it) }
+        }
+    }
 }
 
 @Composable

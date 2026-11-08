@@ -174,6 +174,8 @@ class BehaviorAssociationInspectorTest {
         repeat(3) {
             assertEquals(selected, retainedBehaviorSelection(content.profiles, selected))
             assertEquals(BehaviorAssociationCopy.CONTEXT_NOTICE, content.profiles.single().context.notice)
+            assertEquals(1, content.profiles.single().episodes.episodeCount)
+            assertNull(content.profiles.single().episodes.presenceContrastNote)
         }
         delay(40)
         assertEquals(1, fits.get())
@@ -328,7 +330,9 @@ class BehaviorAssociationInspectorTest {
         assertFalse(insightsScreen.contains("StateMapSection"))
         assertFalse(insightsScreen.contains("BehaviorAssociationSection"))
         assertFalse(insightsScreen.contains("Context balance"))
+        assertFalse(insightsScreen.contains("Exposure episodes"))
         assertFalse(insights.contains("projectBehaviorContextBalance"))
+        assertFalse(insights.contains("projectBehaviorExposureEpisodes"))
         assertNull(com.orbit.wellness.ui.navigation.OrbitNavigation.researchPreviewRoute(debugBuild = false))
         val nav = source(
             "src/main/java/com/orbit/wellness/ui/navigation/OrbitNavHost.kt",
@@ -378,16 +382,19 @@ class BehaviorAssociationInspectorTest {
         ).readText()
         assertTrue(section.contains("BehaviorAssociationCopy.NOT_ENOUGH_DATA"))
         assertTrue(section.contains("var showContext by remember(profile.identity)"))
+        assertTrue(section.contains("var showEpisodes by remember(profile.identity)"))
         assertTrue(section.contains("BehaviorAssociationCopy.CONTEXT_BALANCE"))
+        assertTrue(section.contains("BehaviorAssociationCopy.EXPOSURE_EPISODES"))
         assertFalse(section.contains("observeBehaviorAssociations"))
         assertFalse(section.contains("projectBehaviorContextBalance"))
+        assertFalse(section.contains("projectBehaviorExposureEpisodes"))
         val contextFields = ContextBalancePresentation::class.java.declaredFields.map { it.name }
         assertTrue(contextFields.none { it.contains("pair", ignoreCase = true) })
     }
 
     private fun inspect(dataset: CheckInAnalysisDatasetV2): BehaviorAssociationContent {
         val research = projectBehaviorResearch(dataset, ZoneOffset.UTC)
-        return research.associations.toBehaviorAssociationContent(research.balance)
+        return research.associations.toBehaviorAssociationContent(research.balance, research.episodes)
     }
 
     private fun axisDataset(): CheckInAnalysisDatasetV2 {

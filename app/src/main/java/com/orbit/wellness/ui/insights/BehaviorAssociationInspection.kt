@@ -4,8 +4,11 @@ import com.orbit.wellness.data.CheckInAnalysisSnapshot
 import com.orbit.wellness.domain.checkin.BehaviorAssociationDataset
 import com.orbit.wellness.domain.checkin.BehaviorContextBalanceDataset
 import com.orbit.wellness.domain.checkin.CheckInAnalysisDatasetV2
+import com.orbit.wellness.domain.checkin.BehaviorExposureEpisodeDataset
+import com.orbit.wellness.domain.checkin.projectAlternatingTemporalGraph
 import com.orbit.wellness.domain.checkin.projectBehaviorAssociations
 import com.orbit.wellness.domain.checkin.projectBehaviorContextBalance
+import com.orbit.wellness.domain.checkin.projectBehaviorExposureEpisodes
 import com.orbit.wellness.domain.checkin.projectBehavioralEvidence
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -19,26 +22,30 @@ import java.time.ZoneId
 data class BehaviorResearchProjection(
     val associations: BehaviorAssociationDataset,
     val balance: BehaviorContextBalanceDataset,
+    val episodes: BehaviorExposureEpisodeDataset,
 )
 
 /**
- * Projects evidence once, then associations, then context balance.
- * The balance layer does not build a second evidence dataset.
+ * Projects one graph and one evidence dataset, then associations, context
+ * balance, and exposure episodes. Later stages do not build the evidence again.
  */
 fun projectBehaviorResearch(
     dataset: CheckInAnalysisDatasetV2,
     zone: ZoneId,
 ): BehaviorResearchProjection {
-    val evidence = projectBehavioralEvidence(dataset, zone)
+    val graph = projectAlternatingTemporalGraph(dataset)
+    val evidence = projectBehavioralEvidence(graph, dataset, zone)
     val associations = projectBehaviorAssociations(evidence)
     return BehaviorResearchProjection(
         associations = associations,
         balance = projectBehaviorContextBalance(evidence, associations, zone),
+        episodes = projectBehaviorExposureEpisodes(evidence, graph, associations),
     )
 }
 
 /**
- * Projects one check-in snapshot into association profiles and context balance.
+ * Projects one check-in snapshot into association profiles, context balance,
+ * and exposure episodes.
  *
  * Equal snapshots are skipped. A newer snapshot cancels an older projection.
  * The work runs on [computation], off the main thread. Selection is not an
@@ -58,7 +65,7 @@ fun observeBehaviorAssociations(
         .distinctUntilChanged()
         .mapLatest { snapshot ->
             val research = project(snapshot.dataset, zone)
-            research.associations.toBehaviorAssociationContent(research.balance)
+            research.associations.toBehaviorAssociationContent(research.balance, research.episodes)
         }
         .flowOn(computation)
 }

@@ -16,6 +16,13 @@ import com.orbit.wellness.domain.checkin.ContextGroupBalance
 import com.orbit.wellness.domain.checkin.DescriptiveContrast
 import com.orbit.wellness.domain.checkin.NearestOppositeSummary
 import com.orbit.wellness.domain.checkin.OppositeContextMeasure
+import com.orbit.wellness.domain.checkin.BehaviorExposureEpisode
+import com.orbit.wellness.domain.checkin.BehaviorExposureEpisodeDataset
+import com.orbit.wellness.domain.checkin.BehaviorExposureProfile
+import com.orbit.wellness.domain.checkin.ExposureBreakReason
+import com.orbit.wellness.domain.checkin.ExposureOccurrence
+import com.orbit.wellness.domain.checkin.PresenceContrastAvailability
+import com.orbit.wellness.domain.checkin.UsageUnitTotal
 import com.orbit.wellness.domain.checkin.EmotionAssociation
 import com.orbit.wellness.domain.checkin.EmotionDistribution
 import com.orbit.wellness.domain.checkin.NumericSummary
@@ -49,6 +56,13 @@ object BehaviorAssociationCopy {
             "Clock summaries describe logged intervals, not exact event times. " +
             "They do not adjust the association or identify a cause."
     const val WEAK_CLOCK_MEAN = "Mean clock time is weakly representative."
+    const val EXPOSURE_EPISODES = "Exposure episodes"
+    const val PRESENCE_CONTRAST_UNAVAILABLE =
+        "Presence contrast unavailable. No reviewed absent interval was recorded."
+    const val NO_PRESENT_INTERVALS = "No present intervals"
+    const val EPISODE_NOTICE =
+        "A listed behavior was reported on that interval. The reported window is not a continuous duration, " +
+            "and this does not identify a cause."
 }
 
 data class BehaviorAssociationContent(
@@ -75,6 +89,7 @@ data class BehaviorAssociationProfileView(
     val calendar: CalendarPresentation,
     val quantity: QuantityPresentation,
     val context: ContextBalancePresentation,
+    val episodes: ExposureEpisodesPresentation,
 )
 
 data class SupportPresentation(
@@ -169,6 +184,24 @@ data class NearestGapPresentation(
     val unavailablePresentCount: Int,
 )
 
+data class ExposureEpisodesPresentation(
+    val episodeCount: Int,
+    val presenceContrastNote: String?,
+    val emptyPresentNote: String?,
+    val notice: String,
+    val episodes: List<ExposureEpisodePresentation>,
+)
+
+data class ExposureEpisodePresentation(
+    val title: String,
+    val coverage: String,
+    val structure: String,
+    val trajectory: List<String>,
+    val coExposures: String,
+    val breaks: String,
+    val quantities: List<String>,
+)
+
 sealed interface QuantityPresentation {
     data object PresenceOnly : QuantityPresentation
 
@@ -196,8 +229,10 @@ data class UsageUnitPresentation(
 
 fun BehaviorAssociationDataset.toBehaviorAssociationContent(
     balance: BehaviorContextBalanceDataset,
+    episodes: BehaviorExposureEpisodeDataset,
 ): BehaviorAssociationContent {
     val balanceByIdentity = balance.profiles.associateBy { it.identity }
+    val episodesByIdentity = episodes.profiles.associateBy { it.identity }
     return BehaviorAssociationContent(
         protocol = protocol,
         notice = BehaviorAssociationCopy.NOTICE,
@@ -206,7 +241,10 @@ fun BehaviorAssociationDataset.toBehaviorAssociationContent(
         calendarDayCount = diagnostics.calendarDayCount,
         excludedIntervalCount = diagnostics.excludedIntervalCount,
         profiles = profiles.map { profile ->
-            profile.toProfileView(balanceByIdentity.getValue(profile.identity))
+            profile.toProfileView(
+                balanceByIdentity.getValue(profile.identity),
+                episodesByIdentity.getValue(profile.identity),
+            )
         },
         emptyMessage = BehaviorAssociationCopy.EMPTY,
     )
@@ -243,6 +281,7 @@ internal fun axisLenses(axis: AxisAssociation): List<AxisLensPresentation> {
 
 private fun BehaviorAssociationProfile.toProfileView(
     balance: BehaviorContextBalanceProfile,
+    episodes: BehaviorExposureProfile,
 ): BehaviorAssociationProfileView {
     val kindLabel = identity.kind.kindLabel()
     val intentLabel = identity.intent.intentLabel()
@@ -272,6 +311,7 @@ private fun BehaviorAssociationProfile.toProfileView(
         calendar = calendarDays.toPresentation(),
         quantity = quantity.toPresentation(),
         context = balance.toPresentation(),
+        episodes = episodes.toPresentation(),
     )
 }
 
@@ -454,6 +494,104 @@ private fun String?.intentLabel(): String? = when (this) {
     SubstanceIntent.SUPPORTIVE.name -> "Supportive"
     SubstanceIntent.COPING.name -> "Coping"
     else -> this
+}
+
+private fun BehaviorExposureProfile.toPresentation(): ExposureEpisodesPresentation {
+    return ExposureEpisodesPresentation(
+        episodeCount = episodes.size,
+        presenceContrastNote = if (presenceContrast == PresenceContrastAvailability.UNAVAILABLE) {
+            BehaviorAssociationCopy.PRESENCE_CONTRAST_UNAVAILABLE
+        } else {
+            null
+        },
+        emptyPresentNote = if (episodes.isEmpty()) BehaviorAssociationCopy.NO_PRESENT_INTERVALS else null,
+        notice = BehaviorAssociationCopy.EPISODE_NOTICE,
+        episodes = episodes.mapIndexed { index, episode -> episode.toPresentation(index) },
+    )
+}
+
+private fun BehaviorExposureEpisode.toPresentation(index: Int): ExposureEpisodePresentation {
+    val spanMillis = latestEndAt - earliestStartAt
+    val span = if (spanMillis >= 0) " Stored span ${formatHours(spanMillis)} h." else ""
+    return ExposureEpisodePresentation(
+        title = "Episode ${index + 1}",
+        coverage = "Intervals $presentIntervalCount. Reported windows ${formatHours(reportedWindowDurationMillis)} h.$span",
+        structure = "Roots ${rootKeys.joinToString { it.raw }.ifBlank { "none" }}. " +
+            "Terminals ${terminalKeys.joinToString { it.raw }.ifBlank { "none" }}. " +
+            "Branch points ${branchPoints.size}.",
+        trajectory = occurrences.map { it.toTrajectoryLine() },
+        coExposures = if (coExposures.isEmpty()) {
+            "Co-exposures none"
+        } else {
+            "Co-exposures " + coExposures.joinToString("; ") { exposure ->
+                "${exposure.displayNames.joinToString(", ").ifBlank { exposure.identity.key }} " +
+                    "in ${exposure.intervalCount}"
+            }
+        },
+        breaks = if (breaks.isEmpty()) {
+            "Breaks none"
+        } else {
+            "Breaks " + breaks.joinToString("; ") { breakRecord ->
+                "${breakRecord.side.name.lowercase()} ${breakRecord.key.raw}: " +
+                    breakRecord.reasons.joinToString(", ") { it.label() }
+            }
+        },
+        quantities = occurrences.mapNotNull { it.toQuantityLine() },
+    )
+}
+
+private fun ExposureOccurrence.toTrajectoryLine(): String {
+    val position = pathPosition?.toString() ?: "unavailable"
+    val prior = priorPresentIntervalCount?.toString() ?: "unavailable"
+    val inclusive = inclusivePresentIntervalCount?.toString() ?: "unavailable"
+    val co = coExposures.joinToString(", ") { it.displayNames.joinToString(", ") }.ifBlank { "none" }
+    return "${key.raw} position $position prior $prior inclusive $inclusive " +
+        "${axisTrajectory()} emotion ${startEmotion?.name ?: "missing"}→${endEmotion?.name ?: "missing"} co $co"
+}
+
+private fun ExposureOccurrence.axisTrajectory(): String {
+    fun one(label: String, start: Int?, end: Int?, delta: Int?): String? {
+        if (start == null && end == null) return null
+        val change = if (delta != null) " delta $delta" else ""
+        return "$label ${start ?: "missing"}→${end ?: "missing"}$change"
+    }
+    return listOfNotNull(
+        one("mood", startAxes?.mood, endAxes.mood, axisDeltas.mood),
+        one("energy", startAxes?.energy, endAxes.energy, axisDeltas.energy),
+        one("confidence", startAxes?.confidence, endAxes.confidence, axisDeltas.confidence),
+        one("anxiety", startAxes?.anxiety, endAxes.anxiety, axisDeltas.anxiety),
+    ).joinToString(" ").ifBlank { "axes missing" }
+}
+
+private fun ExposureOccurrence.toQuantityLine(): String? {
+    val quantity = usage ?: return null
+    val completeness = if (quantity.complete) "complete" else "quantity incomplete"
+    val rate = quantity.inclusiveUnitlessPerHour?.let { " inclusive rate ${formatAssociationNumber(it)}/h" } ?: ""
+    return "${key.raw} parsed ${quantity.parsedCount} missing ${quantity.missingCount} " +
+        "unparsed ${quantity.unparsedCount} $completeness " +
+        "current ${formatTotals(quantity.currentTotals)} " +
+        "prior ${formatTotals(quantity.priorTotals)} " +
+        "inclusive ${formatTotals(quantity.inclusiveTotals)}$rate"
+}
+
+private fun formatTotals(totals: List<UsageUnitTotal>?): String {
+    if (totals == null) return "unavailable"
+    if (totals.isEmpty()) return "none"
+    return totals.joinToString(", ") { total ->
+        "${total.unit ?: BehaviorAssociationCopy.UNITLESS} ${formatAssociationNumber(total.total)}"
+    }
+}
+
+private fun formatHours(millis: Long): String = formatAssociationNumber(millis / 3_600_000.0)
+
+private fun ExposureBreakReason.label(): String = when (this) {
+    ExposureBreakReason.REVIEWED_ABSENCE -> "reviewed absence"
+    ExposureBreakReason.UNKNOWN_EVIDENCE -> "unknown evidence"
+    ExposureBreakReason.INCOMPLETE -> "incomplete"
+    ExposureBreakReason.INVALID_CHRONOLOGY -> "invalid chronology"
+    ExposureBreakReason.INCONSISTENT_CONTEXT -> "inconsistent context"
+    ExposureBreakReason.REVERSED_WINDOW -> "reversed window"
+    ExposureBreakReason.UNRESOLVED_LINK -> "unresolved link"
 }
 
 private fun String.axisLabel(): String = when (this) {

@@ -33,7 +33,14 @@ fun projectBehavioralEvidence(
     dataset: CheckInAnalysisDatasetV2,
     zone: ZoneId,
 ): BehavioralEvidenceDataset {
-    val graph = projectAlternatingTemporalGraph(dataset)
+    return projectBehavioralEvidence(projectAlternatingTemporalGraph(dataset), dataset, zone)
+}
+
+fun projectBehavioralEvidence(
+    graph: AlternatingTemporalGraph,
+    dataset: CheckInAnalysisDatasetV2,
+    zone: ZoneId,
+): BehavioralEvidenceDataset {
     val evidence = projectContextualEvidence(graph)
     val steps = graph.causalSteps.associateBy { it.input.transitionId }
     val states = dataset.states.associateBy { StateOccurrenceKey(it.checkInId) }
