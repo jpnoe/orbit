@@ -40,11 +40,6 @@ fun AccentPicker(
             text = stringResource(R.string.accent_color_title),
             style = MaterialTheme.typography.titleMedium,
         )
-        Text(
-            text = stringResource(R.string.accent_color_subtitle),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
         Row(
             modifier = Modifier.horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(12.dp),

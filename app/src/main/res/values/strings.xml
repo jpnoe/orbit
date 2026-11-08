@@ -286,7 +286,6 @@
 
     <string name="profile_title">Profile</string>
     <string name="accent_color_title">Accent color</string>
-    <string name="accent_color_subtitle">Used for selected chips, primary buttons, and sliders. Everything else stays minimal.</string>
     <string name="accent_aurora">Aurora</string>
     <string name="accent_ocean">Ocean</string>
     <string name="accent_violet">Violet</string>
