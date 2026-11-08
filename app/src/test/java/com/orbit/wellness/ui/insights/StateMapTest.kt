@@ -353,6 +353,17 @@ class StateMapTest {
         assertTrue(screen.contains("content.support"))
         assertTrue(screen.contains("content.disclaimer"))
         assertTrue(screen.contains("StateMapCopy.ACCUMULATING"))
+        assertEquals("Color: Older → Newer", StateMapCopy.LEGEND_COLOR)
+        assertEquals("Filled: Later context available", StateMapCopy.LEGEND_FILLED)
+        assertEquals("Outline: Awaiting later context", StateMapCopy.LEGEND_OUTLINE)
+        assertEquals("Lines: Linked check-ins", StateMapCopy.LEGEND_LINES)
+        assertEquals(
+            "Orientation has no fixed meaning. Distance represents relative similarity in this projection.",
+            StateMapCopy.ORIENTATION,
+        )
+        assertTrue(screen.contains("StateMapCopy.LEGEND_COLOR"))
+        assertTrue(screen.contains("StateMapCopy.ORIENTATION"))
+        assertTrue(screen.contains("content.disclaimer"))
         assertFalse(screen.contains("INCOMPATIBLE_"))
         assertFalse(screen.contains("Exception"))
         val content = projectStateMap(dataset(emptyList())).toStateMapContent()
@@ -464,8 +475,8 @@ class StateMapTest {
                 "app/src/main/java/com/orbit/wellness/ui/insights/StateMapSection.kt",
             ),
             source(
-                "src/main/java/com/orbit/wellness/ui/insights/InsightsViewModel.kt",
-                "app/src/main/java/com/orbit/wellness/ui/insights/InsightsViewModel.kt",
+                "src/main/java/com/orbit/wellness/ui/insights/ResearchPreviewViewModel.kt",
+                "app/src/main/java/com/orbit/wellness/ui/insights/ResearchPreviewViewModel.kt",
             ),
         )
         files.forEach { file ->
@@ -477,6 +488,17 @@ class StateMapTest {
         val selection = viewModel.indexOf("combine(presentation, selectedKey)")
         assertTrue(fit >= 0 && selection > fit)
         assertFalse(viewModel.contains("projectStateMap"))
+        val insights = source(
+            "src/main/java/com/orbit/wellness/ui/insights/InsightsViewModel.kt",
+            "app/src/main/java/com/orbit/wellness/ui/insights/InsightsViewModel.kt",
+        ).readText()
+        val screen = source(
+            "src/main/java/com/orbit/wellness/ui/insights/InsightsScreen.kt",
+            "app/src/main/java/com/orbit/wellness/ui/insights/InsightsScreen.kt",
+        ).readText()
+        assertFalse(insights.contains("observeInsightsAnalysis"))
+        assertFalse(insights.contains("projectStateMap"))
+        assertFalse(screen.contains("StateMapSection"))
     }
 
     private fun plot(id: String, at: Long, x: Float, y: Float) = MapPlotPoint(

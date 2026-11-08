@@ -21,6 +21,11 @@ object StateMapCopy {
     const val COULD_NOT_BUILD = "Orbit could not build the state map from the current history."
     const val ACCUMULATING = "Context still accumulating"
     const val NOT_RECORDED = "Not recorded"
+    const val LEGEND_COLOR = "Color: Older → Newer"
+    const val LEGEND_FILLED = "Filled: Later context available"
+    const val LEGEND_OUTLINE = "Outline: Awaiting later context"
+    const val LEGEND_LINES = "Lines: Linked check-ins"
+    const val ORIENTATION = "Orientation has no fixed meaning. Distance represents relative similarity in this projection."
 }
 
 enum class StateMapMode {

@@ -115,6 +115,7 @@
     <string name="wearable_metric_heart_rate_sample">Heart-rate sample</string>
     <string name="wearable_metric_sleep">Sleep session</string>
     <string name="wearable_metric_unknown">Unknown metric</string>
+    <string name="research_preview_title">Research preview</string>
     <string name="daily_guide_continue">Continue</string>
     <string name="daily_guide_done">Done</string>
     <string name="daily_guide_exit">Exit wrap-up</string>

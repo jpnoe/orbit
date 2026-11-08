@@ -5,8 +5,6 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.orbit.wellness.data.CheckInAnalysisRepository
 import com.orbit.wellness.data.WearableObservationRepository
-import com.orbit.wellness.domain.checkin.StateOccurrenceKey
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -17,49 +15,31 @@ sealed interface InsightsUiState {
 
     data class Ready(
         val baseline: InsightsBaseline,
-        val stateMap: StateMapContent,
-        val selectedKey: StateOccurrenceKey?,
     ) : InsightsUiState
 }
 
+/**
+ * The production Insights summary. It reads the check-in snapshot and whether
+ * any wearable row exists. It does not fit the state map.
+ */
 class InsightsViewModel(
     analysis: CheckInAnalysisRepository,
     wearableObservations: WearableObservationRepository,
 ) : ViewModel() {
-    private val selectedKey = MutableStateFlow<StateOccurrenceKey?>(null)
-
-    /**
-     * The fit is cached on this flow. [selectedKey] is combined afterwards,
-     * so choosing a point does not project the snapshot again.
-     */
-    private val presentation: StateFlow<InsightsPresentation?> = observeInsightsAnalysis(
-        snapshots = analysis.observeSnapshot(),
-        wearables = wearableObservations.observe(),
-    ).stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = null,
-    )
-
-    val uiState: StateFlow<InsightsUiState> = combine(presentation, selectedKey) { ready, selected ->
-        if (ready == null) {
-            InsightsUiState.Loading
-        } else {
-            InsightsUiState.Ready(
-                baseline = ready.baseline,
-                stateMap = ready.stateMap,
-                selectedKey = selected,
-            )
-        }
+    val uiState: StateFlow<InsightsUiState> = combine(
+        analysis.observeSnapshot(),
+        wearableObservations.observeCoverage(),
+    ) { snapshot, coverage ->
+        InsightsUiState.Ready(
+            baseline = snapshot.toInsightsBaseline(
+                hasWearableObservations = coverage.hasObservations,
+            ),
+        )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = InsightsUiState.Loading,
     )
-
-    fun selectState(key: StateOccurrenceKey) {
-        selectedKey.value = key
-    }
 
     class Factory(
         private val repository: CheckInAnalysisRepository,

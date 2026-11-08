@@ -7,6 +7,7 @@ import com.orbit.wellness.ui.profile.ProfileSection
 import com.orbit.wellness.ui.profile.ProfileSections
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -100,6 +101,27 @@ class OrbitNavigationTest {
     }
 
     @Test
+    fun researchPreviewIsDebugOnlyAndOutsideTheBottomBar() {
+        assertEquals("profile/research_preview", OrbitNavigation.RESEARCH_PREVIEW)
+        assertEquals("profile/research_preview", OrbitNavigation.researchPreviewRoute(debugBuild = true))
+        assertNull(OrbitNavigation.researchPreviewRoute(debugBuild = false))
+        assertFalse(OrbitNavigation.isTopLevel(OrbitNavigation.RESEARCH_PREVIEW))
+        assertTrue(OrbitNavigation.hidesBottomBar(OrbitNavigation.RESEARCH_PREVIEW))
+        assertEquals("Research preview", stringValue("research_preview_title"))
+        val nav = source(
+            "src/main/java/com/orbit/wellness/ui/navigation/OrbitNavHost.kt",
+            "app/src/main/java/com/orbit/wellness/ui/navigation/OrbitNavHost.kt",
+        ).readText()
+        val profile = source(
+            "src/main/java/com/orbit/wellness/ui/profile/ProfileScreen.kt",
+            "app/src/main/java/com/orbit/wellness/ui/profile/ProfileScreen.kt",
+        ).readText()
+        assertTrue(nav.contains("if (BuildConfig.DEBUG)"))
+        assertTrue(nav.contains("OrbitNavigation.RESEARCH_PREVIEW"))
+        assertTrue(profile.contains("onOpenResearch != null"))
+    }
+
+    @Test
     fun statusRequestOpensARouteOutsideTheBottomBar() {
         assertEquals("status_request", OrbitNavigation.STATUS_REQUEST)
         assertFalse(OrbitNavigation.isTopLevel(OrbitNavigation.STATUS_REQUEST))
@@ -112,6 +134,8 @@ class OrbitNavigationTest {
         val match = Regex("""<string name="$name">([^<]*)</string>""").find(xml)
         return match?.groupValues?.get(1) ?: error("Missing string $name")
     }
+
+    private fun source(vararg paths: String) = paths.map { File(it) }.first { it.isFile }
 
     private fun stringsFile(): File {
         val candidates = listOf(

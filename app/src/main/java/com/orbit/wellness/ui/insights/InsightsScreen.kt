@@ -42,14 +42,7 @@ fun InsightsScreen(
         )
         when (val state = uiState) {
             InsightsUiState.Loading -> InlineLoading()
-            is InsightsUiState.Ready -> {
-                InsightsBody(state.baseline, onOpenLog)
-                StateMapSection(
-                    content = state.stateMap,
-                    selectedKey = state.selectedKey,
-                    onSelect = viewModel::selectState,
-                )
-            }
+            is InsightsUiState.Ready -> InsightsBody(state.baseline, onOpenLog)
         }
     }
 }

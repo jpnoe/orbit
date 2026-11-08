@@ -77,8 +77,31 @@ fun StateMapSection(
         if (detail != null) {
             StateMapDetailCard(detail)
         }
+        StateMapLegend()
         Text(
             text = content.disclaimer,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun StateMapLegend() {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        listOf(
+            StateMapCopy.LEGEND_COLOR,
+            StateMapCopy.LEGEND_FILLED,
+            StateMapCopy.LEGEND_OUTLINE,
+            StateMapCopy.LEGEND_LINES,
+        ).forEach { line ->
+            Text(
+                text = line,
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+        Text(
+            text = StateMapCopy.ORIENTATION,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

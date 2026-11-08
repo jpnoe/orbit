@@ -13,6 +13,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -53,6 +54,7 @@ fun ProfileScreen(
     listsViewModel: MyListsViewModel,
     healthConnectViewModel: HealthConnectViewModel,
     snackbarHostState: SnackbarHostState,
+    onOpenResearch: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var activeSection by remember { mutableStateOf(ProfileSections.defaultSection) }
@@ -87,6 +89,14 @@ fun ProfileScreen(
                     onClick = { activeSection = section },
                     label = { Text(stringResource(section.labelRes())) },
                 )
+            }
+        }
+        if (onOpenResearch != null) {
+            TextButton(
+                onClick = onOpenResearch,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.research_preview_title))
             }
         }
 

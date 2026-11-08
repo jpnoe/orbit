@@ -46,6 +46,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.orbit.wellness.BuildConfig
 import com.orbit.wellness.OrbitApplication
 import com.orbit.wellness.R
 import com.orbit.wellness.ui.checkin.CheckInLogScreen
@@ -69,6 +70,8 @@ import com.orbit.wellness.ui.history.HistoryScreen
 import com.orbit.wellness.ui.history.HistoryViewModel
 import com.orbit.wellness.ui.insights.InsightsScreen
 import com.orbit.wellness.ui.insights.InsightsViewModel
+import com.orbit.wellness.ui.insights.ResearchPreviewScreen
+import com.orbit.wellness.ui.insights.ResearchPreviewViewModel
 import com.orbit.wellness.ui.profile.HealthConnectViewModel
 import com.orbit.wellness.ui.profile.ProfileScreen
 import com.orbit.wellness.ui.profile.TrustedContactsSection
@@ -422,7 +425,24 @@ fun OrbitApp(
                     listsViewModel = listsViewModel,
                     healthConnectViewModel = healthConnectViewModel,
                     snackbarHostState = snackbarHostState,
+                    onOpenResearch = OrbitNavigation.researchPreviewRoute(BuildConfig.DEBUG)?.let { route ->
+                        { navController.navigate(route) }
+                    },
                 )
+            }
+            if (BuildConfig.DEBUG) {
+                composable(OrbitNavigation.RESEARCH_PREVIEW) {
+                    val researchViewModel: ResearchPreviewViewModel = viewModel(
+                        factory = ResearchPreviewViewModel.Factory(
+                            repository = application.checkInAnalysisRepository,
+                            wearableObservations = application.wearableObservationRepository,
+                        ),
+                    )
+                    ResearchPreviewScreen(
+                        viewModel = researchViewModel,
+                        onBack = { navController.popBackStack() },
+                    )
+                }
             }
             composable(OrbitNavigation.STATUS_REQUEST) {
                 Column(
