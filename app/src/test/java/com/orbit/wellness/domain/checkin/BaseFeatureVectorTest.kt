@@ -134,7 +134,7 @@ class BaseFeatureVectorTest {
         val encoded = encodeFeatures(sampleEvidence())
         val schema = encoded.schemas.transition
         val vector = vector(encoded, TransitionOccurrenceKey("reviewed"))
-        assertEquals(1.0, vector.value(schema, "transition.activity.present.name:stretching"), 0.0)
+        assertEquals(1.0, vector.value(schema, FeatureSemantic.ActivityPresent(categoricalKey(null, "Stretching"))), 0.0)
         assertTrue(vector.values.none { it == REPORT_AT.toDouble() })
     }
 
@@ -143,8 +143,9 @@ class BaseFeatureVectorTest {
         val encoded = encodeFeatures(sampleEvidence())
         val schema = encoded.schemas.transition
         val vector = vector(encoded, TransitionOccurrenceKey("reviewed"))
-        assertEquals(1.0, vector.value(schema, "transition.workout.present.option:run"), 0.0)
-        assertEquals(30.0, vector.value(schema, "transition.workout.minutes.option:run"), 0.0)
+        val run = categoricalKey("run", "Run")
+        assertEquals(1.0, vector.value(schema, FeatureSemantic.WorkoutPresent(run)), 0.0)
+        assertEquals(30.0, vector.value(schema, FeatureSemantic.WorkoutMinutes(run)), 0.0)
     }
 
     @Test
@@ -156,8 +157,9 @@ class BaseFeatureVectorTest {
         assertEquals(1.0, vector.value(schema, "transition.diet.size.snack.count"), 0.0)
         assertEquals(0.0, vector.value(schema, "transition.diet.size.small.count"), 0.0)
         assertTrue(vector.observed(schema, "transition.diet.size.small.count"))
-        assertEquals(1.0, vector.value(schema, "transition.diet.food.present.option:oats"), 0.0)
-        assertEquals(2.0, vector.value(schema, "transition.diet.food.count.option:oats"), 0.0)
+        val oats = categoricalKey("oats", "oats")
+        assertEquals(1.0, vector.value(schema, FeatureSemantic.FoodPresent(oats)), 0.0)
+        assertEquals(2.0, vector.value(schema, FeatureSemantic.FoodCount(oats)), 0.0)
         assertTrue(featureNames(schema).none { it == "transition.diet.size.value" })
     }
 
@@ -166,11 +168,13 @@ class BaseFeatureVectorTest {
         val encoded = encodeFeatures(sampleEvidence())
         val schema = encoded.schemas.transition
         val vector = vector(encoded, TransitionOccurrenceKey("reviewed"))
-        assertEquals(7.0, vector.value(schema, "transition.usage.option:coffee.COPING.amount.unitless"), 0.0)
-        assertEquals(3.0, vector.value(schema, "transition.usage.option:coffee.COPING.parsed"), 0.0)
-        assertEquals(10.0, vector.value(schema, "transition.usage.option:coffee.COPING.amount.mg"), 0.0)
-        assertEquals(4.0, vector.value(schema, "transition.usage.option:coffee.SUPPORTIVE.amount.unitless"), 0.0)
-        assertEquals(3.0, vector.value(schema, "transition.usage.name:cigarette.COPING.amount.unitless"), 0.0)
+        val coffee = categoricalKey("coffee", "coffee")
+        val cigarette = categoricalKey(null, "cigarette")
+        assertEquals(7.0, vector.value(schema, usage(coffee, "COPING", UsageMeasurement.AMOUNT, "unitless")), 0.0)
+        assertEquals(3.0, vector.value(schema, usage(coffee, "COPING", UsageMeasurement.PARSED)), 0.0)
+        assertEquals(10.0, vector.value(schema, usage(coffee, "COPING", UsageMeasurement.AMOUNT, "mg")), 0.0)
+        assertEquals(4.0, vector.value(schema, usage(coffee, "SUPPORTIVE", UsageMeasurement.AMOUNT, "unitless")), 0.0)
+        assertEquals(3.0, vector.value(schema, usage(cigarette, "COPING", UsageMeasurement.AMOUNT, "unitless")), 0.0)
         assertEquals("10 mg", sampleEvidence().transitions.first { it.key.raw == "reviewed" }
             .evidence.usage.items.single { it.amountText == "10 mg" }.amountText)
         assertTrue(featureNames(schema).none { it.contains("per_hour.mg") })
@@ -182,11 +186,13 @@ class BaseFeatureVectorTest {
         val schema = encoded.schemas.transition
         val reviewed = vector(encoded, TransitionOccurrenceKey("reviewed"))
         val stopped = vector(encoded, TransitionOccurrenceKey("zero-duration"))
-        assertEquals(3.5, reviewed.value(schema, "transition.usage.option:coffee.COPING.per_hour.unitless"), 0.0)
-        assertTrue(reviewed.observed(schema, "transition.usage.option:coffee.COPING.per_hour.unitless"))
+        val coffee = usage(categoricalKey("coffee", "coffee"), "COPING", UsageMeasurement.PER_HOUR, "unitless")
+        val amount = usage(categoricalKey("coffee", "coffee"), "COPING", UsageMeasurement.AMOUNT, "unitless")
+        assertEquals(3.5, reviewed.value(schema, coffee), 0.0)
+        assertTrue(reviewed.observed(schema, coffee))
         assertEquals(2.0, reviewed.value(schema, "transition.duration.hours"), 0.0)
-        assertFalse(stopped.observed(schema, "transition.usage.option:coffee.COPING.per_hour.unitless"))
-        assertTrue(stopped.observed(schema, "transition.usage.option:coffee.COPING.amount.unitless"))
+        assertFalse(stopped.observed(schema, coffee))
+        assertTrue(stopped.observed(schema, amount))
         assertFalse(featureNames(schema).any { it.contains("per_hour.mg") })
     }
 
@@ -236,7 +242,7 @@ class BaseFeatureVectorTest {
         assertEquals(1.0, absent.value(schema, "protocol.category.workout.unreviewed"), 0.0)
         assertEquals(1.0, absent.value(schema, "protocol.category.diet.conflicting"), 0.0)
         assertEquals(1.0, absent.value(schema, "protocol.category.usage.none"), 0.0)
-        assertFalse(absent.observed(schema, "transition.activity.present.name:stretching"))
+        assertFalse(absent.observed(schema, FeatureSemantic.ActivityPresent(categoricalKey(null, "Stretching"))))
         assertEquals(0.0, none.value(schema, "transition.diet.size.medium.count"), 0.0)
         assertTrue(none.observed(schema, "transition.diet.size.medium.count"))
         assertEquals(1.0, none.value(schema, "protocol.category.diet.entries"), 0.0)
@@ -513,9 +519,22 @@ class BaseFeatureVectorTest {
         importedAt = 1L,
     )
 
+    private fun usage(
+        identity: String,
+        intent: String,
+        measurement: UsageMeasurement,
+        unit: String? = null,
+    ) = FeatureSemantic.Usage(identity, intent, measurement, unit)
+
     private fun EncodedVector.value(schema: FeatureSchema, name: String): Double = values[schema.indexOf(name)]
 
+    private fun EncodedVector.value(schema: FeatureSchema, semantic: FeatureSemantic): Double =
+        values[schema.indexOf(semantic)]
+
     private fun EncodedVector.observed(schema: FeatureSchema, name: String): Boolean = observed[schema.indexOf(name)]
+
+    private fun EncodedVector.observed(schema: FeatureSchema, semantic: FeatureSemantic): Boolean =
+        observed[schema.indexOf(semantic)]
 
     private object CheckInMealSize {
         const val SNACK = "snack"
