@@ -4,17 +4,23 @@ import com.orbit.wellness.data.local.DefaultCheckInAxes
 import java.time.LocalDate
 import kotlin.math.sqrt
 
-const val BEHAVIOR_ASSOCIATION_PROTOCOL = "behavior-association-v1"
+/**
+ * Result contract for association profiles.
+ *
+ * `behavior-association-v1` is the shape already on main, without emotion
+ * distributions. These added fields change that result, so the identifier is
+ * `behavior-association-v2`. The result is still pre-release and internal:
+ * it is not stored, and it is not shown on Insights.
+ */
+const val BEHAVIOR_ASSOCIATION_PROTOCOL = "behavior-association-v2"
 
 /**
  * Descriptive association profiles for one person's recorded history.
  *
  * This reads a [BehavioralEvidenceDataset]. It does not reopen Room, refit the
  * behavior catalog, or read a latent map. Differences are present minus absent.
- * They are not effects, ranks, or hypothesis tests.
- *
- * Ending emotion counts are not included. The interval frames do not carry
- * emotion tokens, and this pass does not go back to the check-in records for them.
+ * They are not effects, ranks, or hypothesis tests. Emotion labels stay
+ * categorical: they are counted, not numbered, averaged, or ranked.
  *
  * A conflicting category is unknown for behaviors in that category. If the
  * interval is inconsistent for another reason, including a conflict in a
@@ -66,8 +72,45 @@ private fun profile(
             presentOccurrences = present.sumOf { it.occurrenceCount },
         ),
         axes = axes,
+        emotions = emotionAssociation(present, absent, intervals.associateBy { it.key }),
         calendarDays = calendarAssociation(days, byKey, axesByState),
         quantity = quantity(entry.identity, present, intervals.associateBy { it.key }),
+    )
+}
+
+/**
+ * Starting emotions use the same resolved-start rule as starting-state
+ * association. Ending emotions use every present or absent interval. Unknown
+ * and excluded intervals do not contribute. Token order is the stored name,
+ * not the count.
+ */
+private fun emotionAssociation(
+    present: List<ClassifiedBehaviorInterval>,
+    absent: List<ClassifiedBehaviorInterval>,
+    intervals: Map<TransitionOccurrenceKey, IntervalBehaviorEvidence>,
+): EmotionAssociation {
+    fun rows(classified: List<ClassifiedBehaviorInterval>) = classified.map { intervals.getValue(it.key) }
+    val presentRows = rows(present)
+    val absentRows = rows(absent)
+    return EmotionAssociation(
+        presentStarting = emotionDistribution(presentRows.filter { it.startStateKey != null }.map { it.startEmotion }),
+        absentStarting = emotionDistribution(absentRows.filter { it.startStateKey != null }.map { it.startEmotion }),
+        presentEnding = emotionDistribution(presentRows.map { it.endEmotion }),
+        absentEnding = emotionDistribution(absentRows.map { it.endEmotion }),
+    )
+}
+
+private fun emotionDistribution(tokens: List<EmotionToken?>): EmotionDistribution {
+    val recorded = tokens.mapNotNull { it?.name }
+    val counts = recorded.groupingBy { it }.eachCount()
+        .entries
+        .sortedBy { it.key }
+        .map { (token, count) -> EmotionTokenCount(token = token, count = count) }
+    return EmotionDistribution(
+        eligibleCount = tokens.size,
+        recordedCount = recorded.size,
+        missingCount = tokens.size - recorded.size,
+        tokens = counts,
     )
 }
 
@@ -391,9 +434,42 @@ data class BehaviorAssociationProfile(
     val intervals: List<ClassifiedBehaviorInterval>,
     val support: IntervalAssociationSupport,
     val axes: List<AxisAssociation>,
+    val emotions: EmotionAssociation,
     val calendarDays: CalendarDayAssociation,
     val quantity: BehaviorQuantityCoverage,
 )
+
+data class EmotionAssociation(
+    val presentStarting: EmotionDistribution,
+    val absentStarting: EmotionDistribution,
+    val presentEnding: EmotionDistribution,
+    val absentEnding: EmotionDistribution,
+)
+
+data class EmotionDistribution(
+    val eligibleCount: Int,
+    val recordedCount: Int,
+    val missingCount: Int,
+    val tokens: List<EmotionTokenCount>,
+) {
+    init {
+        require(eligibleCount == recordedCount + missingCount) { "Emotion support must add up" }
+        require(tokens.sumOf { it.count } == recordedCount) { "Token counts must match recorded emotions" }
+        require(tokens.map { it.token } == tokens.map { it.token }.distinct().sorted()) {
+            "Emotion tokens stay in stored-name order"
+        }
+    }
+}
+
+data class EmotionTokenCount(
+    val token: String,
+    val count: Int,
+) {
+    init {
+        require(token.isNotEmpty()) { "An empty emotion is missing, not a token" }
+        require(count > 0) { "A token count is omitted when it is zero" }
+    }
+}
 
 enum class BehaviorIntervalStatus {
     PRESENT,

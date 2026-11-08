@@ -44,6 +44,64 @@ class BehavioralEvidenceTest {
     }
 
     @Test
+    fun emotionsStayOnResolvedEndpoints() {
+        val evidence = projectBehavioralEvidence(
+            dataset(
+                states = listOf(
+                    state("previous", 0L, mood = 1, emotion = "Calm"),
+                    state("linked", HOUR, mood = 4, emotion = "Bright"),
+                    state("wake", 3 * HOUR, mood = 2, emotion = "Steady"),
+                    state("day", 5 * HOUR, mood = 3, emotion = ""),
+                    state("blank", 6 * HOUR, mood = 3, emotion = ""),
+                ),
+                intervals = listOf(
+                    interval(
+                        end = "linked",
+                        previous = "previous",
+                        start = 0L,
+                        endAt = HOUR,
+                        basis = CheckInContextStartBasis.PREVIOUS_CHECK_IN,
+                    ),
+                    interval(
+                        end = "wake",
+                        previous = "previous",
+                        start = 2 * HOUR,
+                        endAt = 3 * HOUR,
+                        basis = CheckInContextStartBasis.WAKE_TIME,
+                    ),
+                    interval(
+                        end = "day",
+                        previous = "wake",
+                        start = 4 * HOUR,
+                        endAt = 5 * HOUR,
+                        basis = CheckInContextStartBasis.DAY_START,
+                    ),
+                    interval(
+                        end = "blank",
+                        previous = "day",
+                        start = 5 * HOUR,
+                        endAt = 6 * HOUR,
+                        basis = CheckInContextStartBasis.PREVIOUS_CHECK_IN,
+                    ),
+                ),
+            ),
+            ZoneOffset.UTC,
+        )
+        val linked = evidence.intervals.single { it.key.raw == "linked" }
+        assertEquals("Calm", linked.startEmotion?.name)
+        assertEquals("Bright", linked.endEmotion?.name)
+        val wake = evidence.intervals.single { it.key.raw == "wake" }
+        assertNull(wake.startEmotion)
+        assertEquals("Steady", wake.endEmotion?.name)
+        val day = evidence.intervals.single { it.key.raw == "day" }
+        assertNull(day.startEmotion)
+        assertNull(day.endEmotion)
+        val blank = evidence.intervals.single { it.key.raw == "blank" }
+        assertNull(blank.startEmotion)
+        assertNull(blank.endEmotion)
+    }
+
+    @Test
     fun categoryAndIntentKeepTheSameWordsApart() {
         val evidence = projectBehavioralEvidence(namedDataset(), ZoneOffset.UTC)
         val identities = evidence.catalog.map { it.identity }
@@ -340,6 +398,7 @@ class BehavioralEvidenceTest {
         energy: Int? = null,
         confidence: Int? = null,
         anxiety: Int? = null,
+        emotion: String = "",
     ): StateObservationV2 {
         fun reading(axis: String, raw: Int?) = raw?.let { AxisReadingV2(axis, it, it / 10.0) }
         val moodReading = reading(DefaultCheckInAxes.MOOD, mood)
@@ -352,6 +411,7 @@ class BehavioralEvidenceTest {
             localDate = "2026-01-15",
             axes = listOfNotNull(moodReading, energyReading, confidenceReading, anxietyReading).associateBy { it.axisId },
             core = CoreAxisViewV2(moodReading, energyReading, confidenceReading, anxietyReading),
+            emotion = emotion,
         )
     }
 

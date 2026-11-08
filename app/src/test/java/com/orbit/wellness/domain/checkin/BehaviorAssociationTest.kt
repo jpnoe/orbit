@@ -170,8 +170,37 @@ class BehaviorAssociationTest {
     }
 
     @Test
+    fun emotionCountsStayCategoricalAndOrdered() {
+        val shower = associations(emotionDataset()).profile(BehaviorKind.ACTIVITY, "option:opt-shower")
+        val presentStart = shower.emotions.presentStarting
+        assertEquals(1, presentStart.eligibleCount)
+        assertEquals(1, presentStart.recordedCount)
+        assertEquals(0, presentStart.missingCount)
+        assertEquals(listOf("Calm" to 1), presentStart.tokens.map { it.token to it.count })
+        val presentEnd = shower.emotions.presentEnding
+        assertEquals(2, presentEnd.eligibleCount)
+        assertEquals(listOf("Bright" to 1, "Steady" to 1), presentEnd.tokens.map { it.token to it.count })
+        val absentStart = shower.emotions.absentStarting
+        assertEquals(3, absentStart.eligibleCount)
+        assertEquals(1, absentStart.recordedCount)
+        assertEquals(2, absentStart.missingCount)
+        assertEquals(listOf("Bright"), absentStart.tokens.map { it.token })
+        val absentEnd = shower.emotions.absentEnding
+        assertEquals(3, absentEnd.eligibleCount)
+        assertEquals(3, absentEnd.recordedCount)
+        assertEquals(0, absentEnd.missingCount)
+        assertEquals(listOf("Able" to 1, "Calm" to 2), absentEnd.tokens.map { it.token to it.count })
+        val tokens = listOf(presentStart, presentEnd, absentStart, absentEnd).flatMap { side ->
+            side.tokens.map { it.token }
+        }
+        assertFalse(tokens.contains("Secret"))
+        assertFalse(tokens.contains("ShouldNotStart"))
+    }
+
+    @Test
     fun theContractDeclinesPredictionRankingAndRoom() {
         val associations = associations(boundaryDataset())
+        assertEquals("behavior-association-v2", BEHAVIOR_ASSOCIATION_PROTOCOL)
         assertEquals(BEHAVIOR_ASSOCIATION_PROTOCOL, associations.protocol)
         assertTrue(associations.retrospective && associations.descriptive)
         assertTrue(associations.withinIndividualHistory && associations.datasetRelative)
@@ -503,6 +532,7 @@ class BehaviorAssociationTest {
         energy: Int? = null,
         confidence: Int? = null,
         anxiety: Int? = null,
+        emotion: String = "",
     ): StateObservationV2 {
         fun reading(axis: String, raw: Int?) = raw?.let { AxisReadingV2(axis, it, it / 10.0) }
         val readings = listOf(
@@ -521,6 +551,75 @@ class BehaviorAssociationTest {
                 readings.firstOrNull { it.axisId == DefaultCheckInAxes.ENERGY },
                 readings.firstOrNull { it.axisId == DefaultCheckInAxes.CONFIDENCE },
                 readings.firstOrNull { it.axisId == DefaultCheckInAxes.ANXIETY },
+            ),
+            emotion = emotion,
+        )
+    }
+
+    private fun emotionDataset(): CheckInAnalysisDatasetV2 {
+        val start = 50L * DAY
+        return dataset(
+            states = listOf(
+                state("p-start", start, mood = 1, emotion = "Calm"),
+                state("present", start + 2 * HOUR, mood = 2, emotion = "Bright"),
+                state("leak", start + 3 * HOUR, mood = 1, emotion = "ShouldNotStart"),
+                state("wake", start + 4 * HOUR, mood = 2, emotion = "Steady"),
+                state("a1-start", start + 5 * HOUR, mood = 1, emotion = ""),
+                state("absent-one", start + 6 * HOUR, mood = 1, emotion = "Calm"),
+                state("a2-start", start + 7 * HOUR, mood = 1, emotion = "Bright"),
+                state("absent-two", start + 8 * HOUR, mood = 1, emotion = "Able"),
+                state("a3-start", start + 9 * HOUR, mood = 1, emotion = ""),
+                state("absent-three", start + 10 * HOUR, mood = 1, emotion = "Calm"),
+                state("secret", start + 12 * HOUR, mood = 1, emotion = "Secret"),
+            ),
+            intervals = listOf(
+                interval(
+                    "present",
+                    "p-start",
+                    start,
+                    start + 2 * HOUR,
+                    CheckInContextStartBasis.PREVIOUS_CHECK_IN,
+                    activity = CategoryObservationKindV2.ENTRIES,
+                    activities = listOf(activity("shower", "opt-shower")),
+                ),
+                interval(
+                    "wake",
+                    "leak",
+                    start + 3 * HOUR,
+                    start + 4 * HOUR,
+                    CheckInContextStartBasis.WAKE_TIME,
+                    activity = CategoryObservationKindV2.ENTRIES,
+                    activities = listOf(activity("wake-shower", "opt-shower")),
+                ),
+                interval(
+                    "absent-one",
+                    "a1-start",
+                    start + 5 * HOUR,
+                    start + 6 * HOUR,
+                    CheckInContextStartBasis.PREVIOUS_CHECK_IN,
+                ),
+                interval(
+                    "absent-two",
+                    "a2-start",
+                    start + 7 * HOUR,
+                    start + 8 * HOUR,
+                    CheckInContextStartBasis.PREVIOUS_CHECK_IN,
+                ),
+                interval(
+                    "absent-three",
+                    "a3-start",
+                    start + 9 * HOUR,
+                    start + 10 * HOUR,
+                    CheckInContextStartBasis.PREVIOUS_CHECK_IN,
+                ),
+                interval(
+                    "secret",
+                    null,
+                    start + 11 * HOUR,
+                    start + 12 * HOUR,
+                    CheckInContextStartBasis.WAKE_TIME,
+                    activity = CategoryObservationKindV2.UNREVIEWED,
+                ),
             ),
         )
     }

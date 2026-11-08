@@ -25,8 +25,9 @@ const val BEHAVIOR_CATALOG_SCOPE = "retrospective-full-history"
  * projection does not expand one row per catalog option.
  *
  * Wake-time and day-start intervals keep the ending state and do not receive
- * an invented start or a measured delta. A linked pair with no shared observed
- * axis stays linked and has no measured delta.
+ * an invented start, a starting emotion, or a measured delta. An empty emotion
+ * stays missing. A linked pair with no shared observed axis stays linked and
+ * has no measured delta.
  */
 fun projectBehavioralEvidence(
     dataset: CheckInAnalysisDatasetV2,
@@ -92,7 +93,15 @@ private fun intervalEvidence(
         startAxes = startAxes,
         endAxes = endAxes,
         axisDeltas = axisDeltas(startAxes, endAxes, measure),
+        startEmotion = start?.emotion?.let(::recordedEmotion),
+        endEmotion = recordedEmotion(end.emotion),
     )
+}
+
+/** An empty emotion is missing. A non-empty snapshot stays the stored token. */
+private fun recordedEmotion(raw: String): EmotionToken? {
+    if (raw.isEmpty()) return null
+    return EmotionToken(raw)
 }
 
 private fun exposuresOf(payload: TransitionEvidencePayload, durationMillis: Long): List<BehaviorExposure> {
@@ -387,6 +396,10 @@ data class IntervalBehaviorEvidence(
     val endAxes: CoreAxisSnapshot,
     /** Null on an axis that was not explicitly recorded at both endpoints. */
     val axisDeltas: CoreAxisDelta,
+    /** Present only when a resolved starting state recorded an emotion. */
+    val startEmotion: EmotionToken?,
+    /** Present only when the ending check-in recorded an emotion. */
+    val endEmotion: EmotionToken?,
 )
 
 data class CoreAxisSnapshot(

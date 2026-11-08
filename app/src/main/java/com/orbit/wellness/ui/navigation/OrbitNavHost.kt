@@ -68,6 +68,7 @@ import com.orbit.wellness.ui.util.CollectSnackbarMessages
 import com.orbit.wellness.ui.util.showBriefMessage
 import com.orbit.wellness.ui.history.HistoryScreen
 import com.orbit.wellness.ui.history.HistoryViewModel
+import com.orbit.wellness.ui.insights.BehaviorAssociationViewModel
 import com.orbit.wellness.ui.insights.InsightsScreen
 import com.orbit.wellness.ui.insights.InsightsViewModel
 import com.orbit.wellness.ui.insights.ResearchPreviewScreen
@@ -78,6 +79,7 @@ import com.orbit.wellness.ui.profile.TrustedContactsSection
 import com.orbit.wellness.ui.profile.TrustedContactsViewModel
 import com.orbit.wellness.ui.trends.TrendsViewModel
 import com.orbit.wellness.ui.use.MyListsViewModel
+import java.time.ZoneId
 
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -438,8 +440,15 @@ fun OrbitApp(
                             wearableObservations = application.wearableObservationRepository,
                         ),
                     )
+                    val associationViewModel: BehaviorAssociationViewModel = viewModel(
+                        factory = BehaviorAssociationViewModel.Factory(
+                            repository = application.checkInAnalysisRepository,
+                            zone = ZoneId.systemDefault(),
+                        ),
+                    )
                     ResearchPreviewScreen(
-                        viewModel = researchViewModel,
+                        stateMapViewModel = researchViewModel,
+                        associationViewModel = associationViewModel,
                         onBack = { navController.popBackStack() },
                     )
                 }
