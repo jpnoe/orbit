@@ -33,7 +33,7 @@ class LocalContextPreparationTest {
         val recorded = context.state("scale-zero").channel.substantive.read(context.model.state.substantive, mood)
         val missing = context.state("scale-missing").channel.substantive.read(context.model.state.substantive, mood)
         assertTrue(recorded.second)
-        assertEquals(-0.5, recorded.first, 0.0)
+        assertEquals(-1.0, recorded.first, 0.0)
         assertFalse(missing.second)
         assertEquals(0.0, missing.first, 0.0)
     }
@@ -102,6 +102,7 @@ class LocalContextPreparationTest {
         val context = project(vocabularyEvidence())
         val activity = context.model.transition.blocks.single { it.block == SubstantiveBlock.ACTIVITY }
         assertEquals(4, activity.dimensionCount)
+        assertEquals(4, activity.effectiveDimensionCount)
         assertEquals(EQUAL_BLOCK_WEIGHT, activity.weight, 0.0)
         assertEquals(1.0 / sqrt(4.0), activity.factor, 0.0)
         assertTrue(context.model.state.blocks.none { it.block == SubstantiveBlock.STATE_EMOTION })
@@ -127,8 +128,10 @@ class LocalContextPreparationTest {
         assertEquals(9, largeBlock.dimensionCount)
         assertEquals(1.0, smallBlock.factor, 0.0)
         assertEquals(1.0 / sqrt(9.0), largeBlock.factor, 0.0)
-        assertEquals(1.0, activityEnergy(small.transitions.single().channel, small.model.transition), 1e-12)
-        assertEquals(1.0, activityEnergy(large.transitions.single().channel, large.model.transition), 1e-12)
+        assertEquals(1, smallBlock.effectiveDimensionCount)
+        assertEquals(9, largeBlock.effectiveDimensionCount)
+        assertEquals(1.0, activityEnergy(small.transition("only").channel, small.model.transition), 1e-12)
+        assertEquals(1.0, activityEnergy(large.transition("only").channel, large.model.transition), 1e-12)
     }
 
     @Test
@@ -516,28 +519,45 @@ private fun vocabularyEvidence(): ContextualEvidence {
         hours = 2.0,
         activity = CategoryEvidence(CategoryObservationKindV2.ENTRIES, listOf(activity("One"))),
     )
+    val contrast = transition(
+        "contrast",
+        hours = 3.0,
+        activity = CategoryEvidence(
+            CategoryObservationKindV2.ENTRIES,
+            listOf("Two", "Three", "Four").map(::activity),
+        ),
+    )
     val start = state("vocab-start")
     val end = state("vocab-end")
     return assemble(
         states = listOf(start, end),
-        transitions = listOf(full, sparse),
+        transitions = listOf(full, sparse, contrast),
         links = listOf(
             endpoint(full, "vocab-start", "vocab-end"),
             endpoint(sparse, "vocab-start", "vocab-end"),
+            endpoint(contrast, "vocab-start", "vocab-end"),
         ),
     )
 }
 
 private fun activityVocabulary(names: List<String>): ContextualEvidence {
-    val frame = transition(
+    val present = transition(
         "only",
         hours = 1.0,
         activity = CategoryEvidence(CategoryObservationKindV2.ENTRIES, names.map(::activity)),
     )
+    val absent = transition(
+        "none",
+        hours = 2.0,
+        activity = CategoryEvidence(CategoryObservationKindV2.ENTRIES, emptyList()),
+    )
     return assemble(
         states = listOf(state("solo-start"), state("solo-end")),
-        transitions = listOf(frame),
-        links = listOf(endpoint(frame, "solo-start", "solo-end")),
+        transitions = listOf(present, absent),
+        links = listOf(
+            endpoint(present, "solo-start", "solo-end"),
+            endpoint(absent, "solo-start", "solo-end"),
+        ),
     )
 }
 
@@ -552,12 +572,18 @@ private fun missingDimensionEvidence(): ContextualEvidence {
         hours = 1.0,
         activity = CategoryEvidence(CategoryObservationKindV2.UNREVIEWED, listOf(activity("Stretching"))),
     )
+    val absent = transition(
+        "absent",
+        hours = 2.0,
+        activity = CategoryEvidence(CategoryObservationKindV2.ENTRIES, emptyList()),
+    )
     return assemble(
         states = listOf(state("left"), state("right"), state("focal")),
-        transitions = listOf(present, hidden),
+        transitions = listOf(present, hidden, absent),
         links = listOf(
             endpoint(present, "left", "focal"),
             endpoint(hidden, "right", "focal"),
+            endpoint(absent, "left", "right"),
         ),
     )
 }

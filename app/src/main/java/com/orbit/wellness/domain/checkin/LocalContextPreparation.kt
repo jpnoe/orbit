@@ -1,5 +1,6 @@
 package com.orbit.wellness.domain.checkin
 
+import kotlin.math.abs
 import kotlin.math.sqrt
 
 /**
@@ -57,12 +58,16 @@ data class VectorSegment(
  * [center] and [scale] describe substantive numeric features. [scale] is the
  * root-mean-square deviation of the observed values from [center]: the sum of
  * squared deviations divided by the observed count, then the square root.
- * A sample-size correction is not applied. Zero observations, or a deviation
- * of zero, set [nonvarying]. Binary features keep [center] `0` and [scale] `1`
- * and are not marked nonvarying, so a constant presence bit stays 0 or 1.
- * [blockFactor] is [blockWeight] divided by the square root of the substantive
- * column count of [substantiveBlock]. Quality features use weight `0` and
- * factor `1`; they are copied, not standardized.
+ * A sample-size correction is not applied. Zero observations, a deviation of
+ * zero, or a deviation no larger than [NUMERIC_DEVIATION_TOLERANCE] times the
+ * feature's magnitude set [nonvarying]. The magnitude is at least 1, so a
+ * deviation of `1e-8` around a unit-scale feature does not divide. Ordinary
+ * differences are not clipped. A binary column is nonvarying when its observed
+ * values do not differ: one observation, or the same bit every time it is
+ * observed. A missing row is not a second value. [blockFactor] is [blockWeight]
+ * divided by the square root of the block's effective varying columns. A block
+ * whose columns are all nonvarying keeps those columns and uses factor `0`.
+ * Quality features use weight `0` and factor `1`; they are copied.
  */
 data class FeatureScale(
     val index: Int,
@@ -108,14 +113,41 @@ enum class SubstantiveBlock {
 
 data class BlockBalance(
     val block: SubstantiveBlock,
+    /** Substantive columns retained in the schema, including nonvarying ones. */
     val dimensionCount: Int,
+    /** Columns whose observed values can change pairwise geometry. */
+    val effectiveDimensionCount: Int,
     val weight: Double,
     val factor: Double,
 ) {
     init {
         require(dimensionCount > 0) { "$block has no substantive dimensions" }
-        require(factor.isFinite() && factor > 0.0) { "$block factor must be finite" }
+        require(effectiveDimensionCount in 0..dimensionCount) {
+            "$block effective count must not exceed its total"
+        }
+        if (effectiveDimensionCount == 0) {
+            require(factor == 0.0) { "$block has no varying columns and must not be scaled" }
+        } else {
+            require(factor.isFinite() && factor > 0.0) { "$block factor must be finite" }
+        }
     }
+}
+
+/**
+ * A fitted deviation at or below this fraction of the feature's magnitude is
+ * not a geometric difference. The magnitude used with it is at least 1, so
+ * unit-scale features such as a normalized axis treat `1e-8` as noise.
+ */
+const val NUMERIC_DEVIATION_TOLERANCE = 1.0e-8
+
+/**
+ * True when [deviation] is large enough to standardize. [center] sets the
+ * magnitude, which is never smaller than 1.
+ */
+fun deviationChangesGeometry(deviation: Double, center: Double): Boolean {
+    if (!deviation.isFinite() || deviation < 0.0) return false
+    val magnitude = maxOf(1.0, abs(center))
+    return deviation > NUMERIC_DEVIATION_TOLERANCE * magnitude
 }
 
 data class LocalContextLayouts(
@@ -601,15 +633,17 @@ private fun fitChannel(
         FittedFeature(feature, placement, statistic)
     }
     val blocks = SubstantiveBlock.entries.mapNotNull { block ->
-        val count = fitted.count { it.placement.block == block }
-        if (count == 0) {
+        val members = fitted.filter { it.placement.block == block }
+        if (members.isEmpty()) {
             null
         } else {
+            val effective = members.count { !it.statistic.nonvarying }
             BlockBalance(
                 block = block,
-                dimensionCount = count,
+                dimensionCount = members.size,
+                effectiveDimensionCount = effective,
                 weight = EQUAL_BLOCK_WEIGHT,
-                factor = EQUAL_BLOCK_WEIGHT / sqrt(count.toDouble()),
+                factor = if (effective == 0) 0.0 else EQUAL_BLOCK_WEIGHT / sqrt(effective.toDouble()),
             )
         }
     }
@@ -672,19 +706,27 @@ private data class ColumnStatistic(
 )
 
 private fun statistic(scaling: FeatureScaling, samples: List<Double>): ColumnStatistic {
-    if (scaling != FeatureScaling.STANDARDIZE) {
-        return ColumnStatistic(observedCount = samples.size, center = 0.0, scale = 1.0, nonvarying = false)
-    }
     if (samples.isEmpty()) {
         return ColumnStatistic(observedCount = 0, center = 0.0, scale = 0.0, nonvarying = true)
     }
     val count = samples.size
     val center = samples.sum() / count
+    if (scaling == FeatureScaling.BINARY) {
+        val varies = count >= 2 && samples.any { it != samples.first() }
+        return if (varies) {
+            ColumnStatistic(observedCount = count, center = 0.0, scale = 1.0, nonvarying = false)
+        } else {
+            ColumnStatistic(observedCount = count, center = center, scale = 0.0, nonvarying = true)
+        }
+    }
+    if (scaling != FeatureScaling.STANDARDIZE) {
+        return ColumnStatistic(observedCount = count, center = 0.0, scale = 1.0, nonvarying = false)
+    }
     val deviation = sqrt(samples.sumOf { value ->
         val delta = value - center
         delta * delta
     } / count)
-    return if (deviation == 0.0) {
+    return if (!deviationChangesGeometry(deviation, center)) {
         ColumnStatistic(observedCount = count, center = center, scale = 0.0, nonvarying = true)
     } else {
         ColumnStatistic(observedCount = count, center = center, scale = deviation, nonvarying = false)
@@ -710,11 +752,11 @@ private fun render(vector: EncodedVector, segment: VectorSegment): MaskedVector 
             observed += false
             return@forEach
         }
-        val centered = when (feature.scaling) {
-            FeatureScaling.BINARY,
-            FeatureScaling.PASSTHROUGH,
-            -> raw
-            FeatureScaling.STANDARDIZE -> if (feature.nonvarying) 0.0 else (raw - feature.center) / feature.scale
+        val centered = when {
+            feature.scaling == FeatureScaling.PASSTHROUGH -> raw
+            feature.nonvarying -> 0.0
+            feature.scaling == FeatureScaling.BINARY -> raw
+            else -> (raw - feature.center) / feature.scale
         }
         val balanced = if (feature.role == FeatureRole.QUALITY) centered else centered * feature.blockFactor
         require(balanced.isFinite()) { "${feature.sourceName} did not stay finite" }
