@@ -16,6 +16,18 @@ const val RETROSPECTIVE_LATENT_PROTOCOL = "retrospective-multiscale-pca-v1"
 /** Default requested component count. Rank may retain fewer. */
 const val DEFAULT_LATENT_COMPONENT_COUNT = 2
 
+/** Fitted local preparation that produced the multiscale vectors. */
+const val LOCAL_PREPARATION_PROTOCOL = "local-context-preparation-v1"
+
+/** Fixed trailing multiscale projection that [flatten] reads. */
+const val MULTISCALE_CONTEXT_PROTOCOL = "multiscale-context-v1"
+
+/**
+ * A flat vector that was not produced by [LOCAL_PREPARATION_PROTOCOL].
+ * Synthetic rows use this. It does not match a check-in preparation.
+ */
+const val FLAT_SOURCE_PROTOCOL = "flat-source-v1"
+
 /**
  * A Gram eigenvalue is kept when its population variance exceeds this fraction
  * of the active matrix's total population variance. The fraction matches the
@@ -52,6 +64,8 @@ enum class LatentDiagnosticCode {
     NONFINITE_SOURCE_VALUE,
     DECOMPOSITION_FAILED,
     INCOMPATIBLE_LAYOUT,
+    /** Same column identity, different fitted preprocessing. */
+    INCOMPATIBLE_PREPARATION,
 }
 
 data class LatentDiagnostic(
@@ -89,6 +103,94 @@ data class FlatColumnLayout(val columns: List<FlatColumn>) {
 
     val width: Int
         get() = columns.size
+}
+
+/**
+ * One upstream feature after fitting. [center] and [scale] are the preparation
+ * values, not the later PCA column center.
+ */
+data class PreparedFeatureContract(
+    val sourceIndex: Int,
+    val semantic: FeatureSemantic,
+    val sourceName: String,
+    val scaling: FeatureScaling,
+    val role: FeatureRole,
+    val substantiveBlock: SubstantiveBlock?,
+    val observedCount: Int,
+    val center: Double,
+    val scale: Double,
+    val nonvarying: Boolean,
+    val blockWeight: Double,
+    val blockFactor: Double,
+)
+
+data class BlockContract(
+    val block: SubstantiveBlock,
+    val dimensionCount: Int,
+    val effectiveDimensionCount: Int,
+    val weight: Double,
+    val factor: Double,
+)
+
+data class SegmentContract(
+    val name: String,
+    val weight: Double,
+    val factor: Double,
+    val effectiveBlockCount: Int,
+)
+
+/**
+ * One flat column plus the preparation numbers that produced its coordinate.
+ */
+data class LatentColumnContract(
+    val flatIndex: Int,
+    val segmentName: String,
+    val semantic: FeatureSemantic,
+    val sourceName: String,
+    val substantiveBlock: SubstantiveBlock?,
+    val scaling: FeatureScaling,
+    val segmentWeight: Double,
+    val segmentFactor: Double,
+    val segmentEffectiveBlockCount: Int,
+    val sourceBlockFactor: Double,
+    val observedCount: Int,
+    val center: Double,
+    val scale: Double,
+    val nonvarying: Boolean,
+)
+
+/**
+ * Inspectable upstream contract for a flat vector.
+ * Equality is the compatibility check. A matching name and width are not enough
+ * when a center, scale, block factor, or segment factor differs.
+ */
+data class LatentSourceContract(
+    val analysisProtocol: String,
+    val preparationProtocol: String,
+    val multiscaleProtocol: String,
+    val latentProtocol: String,
+    val stateFeatures: List<PreparedFeatureContract>,
+    val transitionFeatures: List<PreparedFeatureContract>,
+    val stateBlocks: List<BlockContract>,
+    val transitionBlocks: List<BlockContract>,
+    val segments: List<SegmentContract>,
+    val columns: List<LatentColumnContract>,
+) {
+    fun sameColumnIdentity(other: LatentSourceContract): Boolean {
+        if (columns.size != other.columns.size) return false
+        return columns.zip(other.columns).all { (left, right) ->
+            left.flatIndex == right.flatIndex &&
+                left.segmentName == right.segmentName &&
+                left.semantic == right.semantic &&
+                left.sourceName == right.sourceName &&
+                left.substantiveBlock == right.substantiveBlock &&
+                left.scaling == right.scaling &&
+                left.segmentWeight == right.segmentWeight &&
+                left.segmentFactor == right.segmentFactor &&
+                left.segmentEffectiveBlockCount == right.segmentEffectiveBlockCount &&
+                left.sourceBlockFactor == right.sourceBlockFactor
+        }
+    }
 }
 
 data class LatentColumnStatistic(
@@ -179,6 +281,7 @@ data class RetrospectiveLatentProjection(
     val degenerateSubspacesStableAcrossRefits: Boolean = false,
     val covarianceDivisor: String = LATENT_COVARIANCE_DIVISOR,
     val status: LatentFitStatus,
+    val sourceContract: LatentSourceContract,
     val layout: FlatColumnLayout,
     val columns: List<LatentColumnStatistic>,
     val activeColumnIndexes: List<Int>,
@@ -202,6 +305,8 @@ data class RetrospectiveLatentProjection(
             "The fit is dataset-relative and does not stabilize a degenerate subspace"
         }
         require(covarianceDivisor == LATENT_COVARIANCE_DIVISOR) { "Covariance divisor must be n" }
+        require(sourceContract.latentProtocol == protocol) { "Source contract protocol differs" }
+        require(sourceContract.columns.size == layout.width) { "Source contract must cover the flat layout" }
         require(columns.size == layout.width) { "Column statistics must cover the flat layout" }
         require(components.all { it.loadings.size == layout.width }) { "Loadings must cover the flat layout" }
         require(totalVariance.isFinite() && totalVariance >= 0.0) { "Total variance must be finite" }
@@ -255,13 +360,19 @@ fun flatColumnLayout(schema: MultiscaleSchema): FlatColumnLayout {
  */
 fun fitRetrospectiveLatentProjection(
     context: MultiscaleContext,
+    preparation: FeaturePreparationModel,
     maxComponents: Int = DEFAULT_LATENT_COMPONENT_COUNT,
 ): RetrospectiveLatentProjection {
     val layout = flatColumnLayout(context.schema)
     val rows = context.states.map { state ->
         LatentSourceRow(state.key, state.recordedAt, flatten(state, context.schema))
     }
-    return fitRetrospectiveLatentProjection(rows, layout, maxComponents)
+    return fitRetrospectiveLatentProjection(
+        rows = rows,
+        layout = layout,
+        source = latentSourceContract(preparation, context.schema),
+        maxComponents = maxComponents,
+    )
 }
 
 /**
@@ -272,17 +383,23 @@ fun fitRetrospectiveLatentProjection(
  * `X` has one row per training state and one column per active flat coordinate.
  * Dividing a Gram eigenvalue by `n` is the population variance. No second
  * standardization and no per-row normalization is applied.
+ *
+ * Jacobi works on the `n × n` Gram matrix. Its cost grows with the number of
+ * states and is meant for the current prototype history. This fit does not
+ * drop or sample states.
  */
 fun fitRetrospectiveLatentProjection(
     rows: List<LatentSourceRow>,
     layout: FlatColumnLayout,
     maxComponents: Int = DEFAULT_LATENT_COMPONENT_COUNT,
+    source: LatentSourceContract = layout.directSourceContract(),
 ): RetrospectiveLatentProjection {
     return fitRetrospectiveLatent(
         rows = rows,
         layout = layout,
         maxComponents = maxComponents,
         maxRotations = defaultJacobiRotations(rows.size),
+        source = source,
     )
 }
 
@@ -291,6 +408,7 @@ internal fun fitRetrospectiveLatent(
     layout: FlatColumnLayout,
     maxComponents: Int,
     maxRotations: Int,
+    source: LatentSourceContract = layout.directSourceContract(),
 ): RetrospectiveLatentProjection {
     require(maxComponents >= 1) { "Request at least one latent component" }
     rows.forEach { row ->
@@ -307,6 +425,7 @@ internal fun fitRetrospectiveLatent(
     if (nonfinite) {
         return unavailable(
             layout = layout,
+            source = source,
             ordered = ordered,
             columns = inactiveStatistics(layout, ordered.size),
             requested = maxComponents,
@@ -319,13 +438,13 @@ internal fun fitRetrospectiveLatent(
     val statistics = columnStatistics(ordered, layout)
     if (ordered.isEmpty()) {
         return unavailable(
-            layout, ordered, statistics, maxComponents,
+            layout, source, ordered, statistics, maxComponents,
             LatentDiagnostic(LatentDiagnosticCode.NO_STATES, "The retrospective fit has no states"),
         )
     }
     if (ordered.size < 2) {
         return unavailable(
-            layout, ordered, statistics, maxComponents,
+            layout, source, ordered, statistics, maxComponents,
             LatentDiagnostic(
                 LatentDiagnosticCode.INSUFFICIENT_STATES,
                 "One state has no variance to estimate",
@@ -335,7 +454,7 @@ internal fun fitRetrospectiveLatent(
     val active = statistics.filter { it.active }
     if (active.isEmpty()) {
         return unavailable(
-            layout, ordered, statistics, maxComponents,
+            layout, source, ordered, statistics, maxComponents,
             LatentDiagnostic(
                 LatentDiagnosticCode.NO_ACTIVE_COLUMNS,
                 "No flat column varies enough to enter PCA, so the fit has rank zero",
@@ -347,7 +466,7 @@ internal fun fitRetrospectiveLatent(
     val eigen = symmetricJacobi(gram, maxRotations)
     if (!eigen.converged) {
         return unavailable(
-            layout, ordered, statistics, maxComponents,
+            layout, source, ordered, statistics, maxComponents,
             LatentDiagnostic(
                 LatentDiagnosticCode.DECOMPOSITION_FAILED,
                 "Jacobi rotation did not converge",
@@ -365,7 +484,7 @@ internal fun fitRetrospectiveLatent(
     val retained = meaningful.take(cap)
     if (retained.isEmpty()) {
         return unavailable(
-            layout, ordered, statistics, maxComponents,
+            layout, source, ordered, statistics, maxComponents,
             LatentDiagnostic(
                 LatentDiagnosticCode.ZERO_RANK,
                 "Active columns produced no meaningful positive eigenvalue",
@@ -404,6 +523,7 @@ internal fun fitRetrospectiveLatent(
     }
     return RetrospectiveLatentProjection(
         status = LatentFitStatus.FITTED,
+        sourceContract = source,
         layout = layout,
         columns = statistics,
         activeColumnIndexes = active.map { it.flatIndex },
@@ -419,17 +539,19 @@ internal fun fitRetrospectiveLatent(
 
 /**
  * Projects one compatible flat vector with the fitted centers and loadings.
- * A different width, segment order, semantic, or factor fails instead of being
- * truncated or reordered. The model is not refit.
+ * The vector's [source] must be the preparation that produced it. A different
+ * width, segment order, semantic, or factor is [LatentDiagnosticCode.INCOMPATIBLE_LAYOUT].
+ * The same column identity with different fitted centers or scales is
+ * [LatentDiagnosticCode.INCOMPATIBLE_PREPARATION]. The model is not refit.
  */
 fun transformRetrospectiveLatent(
     vector: FlatMultiscaleVector,
-    layout: FlatColumnLayout,
+    source: LatentSourceContract,
     projection: RetrospectiveLatentProjection,
 ): LatentTransform {
-    requireCompatibleLatentLayout(layout, projection.layout)
-    require(vector.values.size == layout.width) {
-        "INCOMPATIBLE_LAYOUT: vector width ${vector.values.size} does not match ${layout.width}"
+    requireCompatibleLatentSource(source, projection.sourceContract)
+    require(vector.values.size == projection.layout.width) {
+        "INCOMPATIBLE_LAYOUT: vector width ${vector.values.size} does not match ${projection.layout.width}"
     }
     val coverage = coverageOf(vector)
     if (projection.status != LatentFitStatus.FITTED) {
@@ -450,6 +572,15 @@ fun transformRetrospectiveLatent(
         observedFraction = coverage.second,
         exclusionReason = null,
     )
+}
+
+fun requireCompatibleLatentSource(actual: LatentSourceContract, fitted: LatentSourceContract) {
+    require(actual.sameColumnIdentity(fitted)) {
+        "INCOMPATIBLE_LAYOUT: the flat column layout does not match the fitted projection"
+    }
+    require(actual == fitted) {
+        "INCOMPATIBLE_PREPARATION: fitted centers, scales, or upstream preparation differ"
+    }
 }
 
 fun requireCompatibleLatentLayout(actual: FlatColumnLayout, expected: FlatColumnLayout) {
@@ -704,6 +835,7 @@ private fun inactiveStatistics(layout: FlatColumnLayout, rowCount: Int): List<La
 
 private fun unavailable(
     layout: FlatColumnLayout,
+    source: LatentSourceContract,
     ordered: List<LatentSourceRow>,
     columns: List<LatentColumnStatistic>,
     requested: Int,
@@ -722,6 +854,7 @@ private fun unavailable(
     }
     return RetrospectiveLatentProjection(
         status = LatentFitStatus.UNAVAILABLE,
+        sourceContract = source,
         layout = layout,
         columns = columns,
         activeColumnIndexes = emptyList(),
@@ -785,6 +918,134 @@ private fun jacobiRotate(
         vectors[k][q] = s * vip + c * viq
     }
 }
+
+fun latentSourceContract(
+    preparation: FeaturePreparationModel,
+    schema: MultiscaleSchema,
+): LatentSourceContract {
+    val layout = flatColumnLayout(schema)
+    val stateBySource = (preparation.state.substantive.features + preparation.state.quality.features)
+        .associateBy { it.sourceIndex }
+    val transitionBySource = (preparation.transition.substantive.features + preparation.transition.quality.features)
+        .associateBy { it.sourceIndex }
+    schema.retrospective.first { it.name == "local.self" }.features.forEach { feature ->
+        val prepared = stateBySource.getValue(feature.sourceIndex)
+        require(prepared.center == feature.center && prepared.scale == feature.scale) {
+            "Multiscale state columns do not match the fitted preparation"
+        }
+    }
+    return LatentSourceContract(
+        analysisProtocol = CheckInAnalysisDatasetV2.PROTOCOL,
+        preparationProtocol = LOCAL_PREPARATION_PROTOCOL,
+        multiscaleProtocol = MULTISCALE_CONTEXT_PROTOCOL,
+        latentProtocol = RETROSPECTIVE_LATENT_PROTOCOL,
+        stateFeatures = preparation.state.featureContracts(stateBySource),
+        transitionFeatures = preparation.transition.featureContracts(transitionBySource),
+        stateBlocks = preparation.state.blocks.map { it.toContract() },
+        transitionBlocks = preparation.transition.blocks.map { it.toContract() },
+        segments = schema.retrospective.map { segment ->
+            SegmentContract(
+                name = segment.name,
+                weight = segment.weight,
+                factor = segment.factor,
+                effectiveBlockCount = segment.effectiveBlockCount,
+            )
+        },
+        columns = buildList {
+            schema.retrospective.forEach { segment ->
+                segment.features.forEach { feature ->
+                    add(layout.columns[size].toContract(feature))
+                }
+            }
+        },
+    )
+}
+
+fun FlatColumnLayout.directSourceContract(): LatentSourceContract {
+    return LatentSourceContract(
+        analysisProtocol = FLAT_SOURCE_PROTOCOL,
+        preparationProtocol = FLAT_SOURCE_PROTOCOL,
+        multiscaleProtocol = FLAT_SOURCE_PROTOCOL,
+        latentProtocol = RETROSPECTIVE_LATENT_PROTOCOL,
+        stateFeatures = emptyList(),
+        transitionFeatures = emptyList(),
+        stateBlocks = emptyList(),
+        transitionBlocks = emptyList(),
+        segments = columns.map { it.segmentName }.distinct().map { name ->
+            val sample = columns.first { it.segmentName == name }
+            SegmentContract(
+                name = name,
+                weight = sample.segmentWeight,
+                factor = sample.segmentFactor,
+                effectiveBlockCount = sample.segmentEffectiveBlockCount,
+            )
+        },
+        columns = columns.map { column ->
+            LatentColumnContract(
+                flatIndex = column.flatIndex,
+                segmentName = column.segmentName,
+                semantic = column.semantic,
+                sourceName = column.sourceName,
+                substantiveBlock = column.substantiveBlock,
+                scaling = column.scaling,
+                segmentWeight = column.segmentWeight,
+                segmentFactor = column.segmentFactor,
+                segmentEffectiveBlockCount = column.segmentEffectiveBlockCount,
+                sourceBlockFactor = column.sourceBlockFactor,
+                observedCount = 0,
+                center = 0.0,
+                scale = 1.0,
+                nonvarying = column.nonvaryingInPreparation,
+            )
+        },
+    )
+}
+
+private fun PreparedChannelSchema.featureContracts(
+    bySource: Map<Int, FeatureScale>,
+): List<PreparedFeatureContract> {
+    return sourceSemantics.indices.map { index -> bySource.getValue(index).toFeatureContract() }
+}
+
+private fun FeatureScale.toFeatureContract() = PreparedFeatureContract(
+    sourceIndex = sourceIndex,
+    semantic = sourceSemantic,
+    sourceName = sourceName,
+    scaling = scaling,
+    role = role,
+    substantiveBlock = substantiveBlock,
+    observedCount = observedCount,
+    center = center,
+    scale = scale,
+    nonvarying = nonvarying,
+    blockWeight = blockWeight,
+    blockFactor = blockFactor,
+)
+
+private fun BlockBalance.toContract() = BlockContract(
+    block = block,
+    dimensionCount = dimensionCount,
+    effectiveDimensionCount = effectiveDimensionCount,
+    weight = weight,
+    factor = factor,
+)
+
+private fun FlatColumn.toContract(feature: FeatureScale) = LatentColumnContract(
+    flatIndex = flatIndex,
+    segmentName = segmentName,
+    semantic = semantic,
+    sourceName = sourceName,
+    substantiveBlock = substantiveBlock,
+    scaling = scaling,
+    segmentWeight = segmentWeight,
+    segmentFactor = segmentFactor,
+    segmentEffectiveBlockCount = segmentEffectiveBlockCount,
+    sourceBlockFactor = sourceBlockFactor,
+    observedCount = feature.observedCount,
+    center = feature.center,
+    scale = feature.scale,
+    nonvarying = feature.nonvarying,
+)
 
 private fun FlatColumn.sameCoordinate(other: FlatColumn): Boolean {
     return flatIndex == other.flatIndex &&

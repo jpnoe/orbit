@@ -84,12 +84,12 @@ class LatentProjectionTest {
         val fitted = fitRetrospectiveLatentProjection(rows, twoColumns())
         val missing = transformRetrospectiveLatent(
             FlatMultiscaleVector(listOf(4.0, 0.0), listOf(true, false)),
-            twoColumns(),
+            fitted.sourceContract,
             fitted,
         )
         val explicitMean = transformRetrospectiveLatent(
             FlatMultiscaleVector(listOf(4.0, 20.0), listOf(true, true)),
-            twoColumns(),
+            fitted.sourceContract,
             fitted,
         )
         assertCoordinatesClose(explicitMean.coordinates, missing.coordinates)
@@ -283,7 +283,7 @@ class LatentProjectionTest {
         val rows = orthogonalRows()
         val fitted = fitRetrospectiveLatentProjection(rows, twoColumns())
         rows.forEach { source ->
-            val transformed = transformRetrospectiveLatent(source.vector, twoColumns(), fitted)
+            val transformed = transformRetrospectiveLatent(source.vector, fitted.sourceContract, fitted)
             val stored = fitted.states.single { it.key == source.key }.coordinates
             assertCoordinatesClose(stored, transformed.coordinates)
         }
@@ -295,7 +295,7 @@ class LatentProjectionTest {
         val before = fitted.components.map { it.loadings }
         val transformed = transformRetrospectiveLatent(
             FlatMultiscaleVector(listOf(0.25, -0.5), listOf(true, true)),
-            twoColumns(),
+            fitted.sourceContract,
             fitted,
         )
         assertEquals(before, fitted.components.map { it.loadings })
@@ -311,7 +311,7 @@ class LatentProjectionTest {
         val failure = runCatching {
             transformRetrospectiveLatent(
                 FlatMultiscaleVector(listOf(0.0, 0.0, 0.0), listOf(true, true, true)),
-                grown,
+                grown.directSourceContract(),
                 fitted,
             )
         }.exceptionOrNull()
@@ -321,7 +321,7 @@ class LatentProjectionTest {
         val swapped = runCatching {
             transformRetrospectiveLatent(
                 FlatMultiscaleVector(listOf(0.0, 0.0), listOf(true, true)),
-                reordered,
+                reordered.directSourceContract(),
                 fitted,
             )
         }.exceptionOrNull()
@@ -331,8 +331,9 @@ class LatentProjectionTest {
 
     @Test
     fun theSameMoodWithDifferentTemporalContextCanSeparate() {
-        val context = variedContext()
-        val fitted = fitRetrospectiveLatentProjection(context, maxComponents = 8)
+        val held = variedHold()
+        val context = held.multiscale
+        val fitted = fitRetrospectiveLatentProjection(context, held.model, maxComponents = 8)
         val schema = context.schema
         val mood = flatColumnLayout(schema).columns.indexOfFirst { column ->
             column.segmentName == "local.self" &&
@@ -356,7 +357,7 @@ class LatentProjectionTest {
         val fitted = fitRetrospectiveLatentProjection(orthogonalRows(), twoColumns())
         val transformed = transformRetrospectiveLatent(
             FlatMultiscaleVector(listOf(1.0, 0.0), listOf(true, false)),
-            twoColumns(),
+            fitted.sourceContract,
             fitted,
         )
         assertEquals(1, transformed.observedColumnCount)
@@ -410,7 +411,8 @@ class LatentProjectionTest {
 
     @Test
     fun latentNumbersStayFinite() {
-        val fitted = fitRetrospectiveLatentProjection(variedContext(), maxComponents = 4)
+        val held = variedHold()
+        val fitted = fitRetrospectiveLatentProjection(held.multiscale, held.model, maxComponents = 4)
         assertTrue(fitted.totalVariance.isFinite())
         fitted.columns.forEach { column ->
             assertTrue(column.center.isFinite() && column.deviation.isFinite() && column.variance.isFinite())
@@ -421,6 +423,46 @@ class LatentProjectionTest {
             assertTrue(component.loadings.all { it.isFinite() })
         }
         fitted.states.forEach { state -> assertTrue(state.coordinates.all { it.isFinite() }) }
+    }
+
+    @Test
+    fun differentPreparationCentersAndScalesAreIncompatible() {
+        val wide = preparationHold(listOf(0.0, 1.0))
+        val narrow = preparationHold(listOf(0.0, 0.4), wide.schemas)
+        assertTrue(wide.contract.sameColumnIdentity(narrow.contract))
+        assertNotEquals(wide.contract, narrow.contract)
+        val mood = FeatureSemantic.AxisValue(DefaultCheckInAxes.MOOD)
+        val wideMood = wide.contract.stateFeatures.single { it.semantic == mood }
+        val narrowMood = narrow.contract.stateFeatures.single { it.semantic == mood }
+        assertNotEquals(wideMood.center, narrowMood.center)
+        assertNotEquals(wideMood.scale, narrowMood.scale)
+        val foreign = flatten(narrow.multiscale.states.first(), narrow.multiscale.schema)
+        val failure = runCatching {
+            transformRetrospectiveLatent(foreign, narrow.contract, wide.projection)
+        }.exceptionOrNull()
+        assertTrue(failure is IllegalArgumentException)
+        assertTrue(failure!!.message!!.contains(LatentDiagnosticCode.INCOMPATIBLE_PREPARATION.name))
+        val training = wide.multiscale.states.first()
+        val reproduced = transformRetrospectiveLatent(
+            flatten(training, wide.multiscale.schema),
+            wide.contract,
+            wide.projection,
+        )
+        assertCoordinatesClose(
+            wide.projection.states.single { it.key == training.key }.coordinates,
+            reproduced.coordinates,
+        )
+    }
+
+    @Test
+    fun equalPreparationContractsRemainCompatible() {
+        val first = preparationHold(listOf(0.0, 1.0))
+        val second = preparationHold(listOf(0.0, 1.0), first.schemas)
+        assertEquals(first.contract, second.contract)
+        val vector = flatten(second.multiscale.states.first(), second.multiscale.schema)
+        val transformed = transformRetrospectiveLatent(vector, second.contract, first.projection)
+        assertNull(transformed.exclusionReason)
+        assertTrue(transformed.coordinates.all { it.isFinite() })
     }
 
     @Test
@@ -529,28 +571,56 @@ private fun row(
     observed: List<Boolean> = List(values.size) { true },
 ) = LatentSourceRow(StateOccurrenceKey(id), at, FlatMultiscaleVector(values, observed))
 
-private fun variedContext(): MultiscaleContext {
+private data class HeldContext(val multiscale: MultiscaleContext, val model: FeaturePreparationModel)
+
+private fun variedHold(): HeldContext {
     val hour = 3_600_000L
     val start = 30L * 24L * hour
-    val states = listOf(
-        latentState("s1", start, mood = 0.0),
-        latentState("s2", start + hour, mood = 0.2),
-        latentState("s3", start + 2 * hour, mood = 0.2),
-        latentState("s4", start + 3 * hour, mood = 0.8),
+    val evidence = latentEvidence(
+        listOf(
+            latentState("s1", start, mood = 0.0),
+            latentState("s2", start + hour, mood = 0.2),
+            latentState("s3", start + 2 * hour, mood = 0.2),
+            latentState("s4", start + 3 * hour, mood = 0.8),
+        ),
     )
-    val evidence = ContextualEvidence(
-        states = states,
-        transitions = emptyList(),
-        statesByKey = states.associateBy { it.key },
-        transitionsByKey = emptyMap(),
-        wearablesById = emptyMap(),
-        retrospectiveStates = emptyList(),
-        retrospectiveTransitions = emptyList(),
-        causalExamples = emptyList(),
-        issues = emptyList(),
-    )
-    return projectMultiscale(evidence, projectLocalContext(evidence, encodeFeatures(evidence)))
+    val local = projectLocalContext(evidence, encodeFeatures(evidence))
+    return HeldContext(projectMultiscale(evidence, local), local.model)
 }
+
+private fun variedContext(): MultiscaleContext = variedHold().multiscale
+
+private data class PreparedHold(
+    val schemas: FeatureSchemas,
+    val multiscale: MultiscaleContext,
+    val contract: LatentSourceContract,
+    val projection: RetrospectiveLatentProjection,
+)
+
+private fun preparationHold(moods: List<Double>, schemas: FeatureSchemas? = null): PreparedHold {
+    val hour = 3_600_000L
+    val start = 40L * 24L * hour
+    val evidence = latentEvidence(
+        moods.mapIndexed { index, mood -> latentState("m$index", start + index * hour, mood) },
+    )
+    val encoded = if (schemas == null) encodeFeatures(evidence) else encodeFeatures(evidence, schemas)
+    val local = projectLocalContext(evidence, encoded)
+    val multiscale = projectMultiscale(evidence, local)
+    val projection = fitRetrospectiveLatentProjection(multiscale, local.model)
+    return PreparedHold(encoded.schemas, multiscale, projection.sourceContract, projection)
+}
+
+private fun latentEvidence(states: List<StateEvidenceFrame>) = ContextualEvidence(
+    states = states,
+    transitions = emptyList(),
+    statesByKey = states.associateBy { it.key },
+    transitionsByKey = emptyMap(),
+    wearablesById = emptyMap(),
+    retrospectiveStates = emptyList(),
+    retrospectiveTransitions = emptyList(),
+    causalExamples = emptyList(),
+    issues = emptyList(),
+)
 
 private fun latentState(id: String, at: Long, mood: Double) = StateEvidenceFrame(
     key = StateOccurrenceKey(id),
