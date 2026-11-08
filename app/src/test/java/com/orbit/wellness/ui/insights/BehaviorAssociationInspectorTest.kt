@@ -18,7 +18,6 @@ import com.orbit.wellness.domain.checkin.UsageCategoryObservationV2
 import com.orbit.wellness.domain.checkin.UsageObservationV2
 import com.orbit.wellness.domain.checkin.WorkoutCategoryObservationV2
 import com.orbit.wellness.domain.checkin.WorkoutObservationV2
-import com.orbit.wellness.domain.checkin.projectBehaviorAssociations
 import com.orbit.wellness.domain.checkin.projectBehavioralEvidence
 import com.orbit.wellness.domain.checkin.summarizeCheckInAnalysis
 import kotlinx.coroutines.CompletableDeferred
@@ -166,7 +165,7 @@ class BehaviorAssociationInspectorTest {
                 computation = Dispatchers.Default,
             ) { dataset, zone ->
                 fits.incrementAndGet()
-                projectBehaviorAssociations(projectBehavioralEvidence(dataset, zone))
+                projectBehaviorResearch(dataset, zone)
             }.collect { contents += it }
         }
         withTimeout(5_000) { while (fits.get() < 1) delay(20) }
@@ -174,6 +173,7 @@ class BehaviorAssociationInspectorTest {
         val selected = content.profiles.single().identity
         repeat(3) {
             assertEquals(selected, retainedBehaviorSelection(content.profiles, selected))
+            assertEquals(BehaviorAssociationCopy.CONTEXT_NOTICE, content.profiles.single().context.notice)
         }
         delay(40)
         assertEquals(1, fits.get())
@@ -192,7 +192,7 @@ class BehaviorAssociationInspectorTest {
                 computation = Dispatchers.Default,
             ) { dataset, zone ->
                 seen += zone
-                projectBehaviorAssociations(projectBehavioralEvidence(dataset, zone))
+                projectBehaviorResearch(dataset, zone)
             }.first()
         }
         assertEquals(listOf(losAngeles), seen)
@@ -221,7 +221,7 @@ class BehaviorAssociationInspectorTest {
                 computation = Dispatchers.Default,
             ) { dataset, zone ->
                 fits.incrementAndGet()
-                projectBehaviorAssociations(projectBehavioralEvidence(dataset, zone))
+                projectBehaviorResearch(dataset, zone)
             }.collect { }
         }
         withTimeout(5_000) { while (fits.get() < 1) delay(20) }
@@ -245,7 +245,7 @@ class BehaviorAssociationInspectorTest {
                     computation = executor.asCoroutineDispatcher(),
                 ) { dataset, zone ->
                     names += Thread.currentThread().name
-                    projectBehaviorAssociations(projectBehavioralEvidence(dataset, zone))
+                    projectBehaviorResearch(dataset, zone)
                 }.first()
             }
             assertTrue(names.single().contains("behavior-association"))
@@ -272,7 +272,7 @@ class BehaviorAssociationInspectorTest {
                     delay(30_000)
                     slowFinished = true
                 }
-                projectBehaviorAssociations(projectBehavioralEvidence(dataset, zone))
+                projectBehaviorResearch(dataset, zone)
             }.collect { counts += it.behaviorCount }
         }
         withTimeout(5_000) { started.await() }
@@ -327,6 +327,8 @@ class BehaviorAssociationInspectorTest {
         assertFalse(insights.contains("projectStateMap"))
         assertFalse(insightsScreen.contains("StateMapSection"))
         assertFalse(insightsScreen.contains("BehaviorAssociationSection"))
+        assertFalse(insightsScreen.contains("Context balance"))
+        assertFalse(insights.contains("projectBehaviorContextBalance"))
         assertNull(com.orbit.wellness.ui.navigation.OrbitNavigation.researchPreviewRoute(debugBuild = false))
         val nav = source(
             "src/main/java/com/orbit/wellness/ui/navigation/OrbitNavHost.kt",
@@ -370,15 +372,23 @@ class BehaviorAssociationInspectorTest {
             "Descriptive associations from recorded history; not causal or predictive.",
             BehaviorAssociationCopy.NOTICE,
         )
-        assertTrue(source(
+        val section = source(
             "src/main/java/com/orbit/wellness/ui/insights/BehaviorAssociationSection.kt",
             "app/src/main/java/com/orbit/wellness/ui/insights/BehaviorAssociationSection.kt",
-        ).readText().contains("BehaviorAssociationCopy.NOT_ENOUGH_DATA"))
+        ).readText()
+        assertTrue(section.contains("BehaviorAssociationCopy.NOT_ENOUGH_DATA"))
+        assertTrue(section.contains("var showContext by remember(profile.identity)"))
+        assertTrue(section.contains("BehaviorAssociationCopy.CONTEXT_BALANCE"))
+        assertFalse(section.contains("observeBehaviorAssociations"))
+        assertFalse(section.contains("projectBehaviorContextBalance"))
+        val contextFields = ContextBalancePresentation::class.java.declaredFields.map { it.name }
+        assertTrue(contextFields.none { it.contains("pair", ignoreCase = true) })
     }
 
-    private fun inspect(dataset: CheckInAnalysisDatasetV2) = projectBehaviorAssociations(
-        projectBehavioralEvidence(dataset, ZoneOffset.UTC),
-    ).toBehaviorAssociationContent()
+    private fun inspect(dataset: CheckInAnalysisDatasetV2): BehaviorAssociationContent {
+        val research = projectBehaviorResearch(dataset, ZoneOffset.UTC)
+        return research.associations.toBehaviorAssociationContent(research.balance)
+    }
 
     private fun axisDataset(): CheckInAnalysisDatasetV2 {
         val start = 40L * DAY

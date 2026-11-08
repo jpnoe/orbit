@@ -7,14 +7,21 @@ import com.orbit.wellness.domain.checkin.BehaviorAssociationDataset
 import com.orbit.wellness.domain.checkin.BehaviorAssociationProfile
 import com.orbit.wellness.domain.checkin.BehaviorIdentity
 import com.orbit.wellness.domain.checkin.BehaviorKind
+import com.orbit.wellness.domain.checkin.BehaviorContextBalanceDataset
+import com.orbit.wellness.domain.checkin.BehaviorContextBalanceProfile
 import com.orbit.wellness.domain.checkin.BehaviorQuantityCoverage
 import com.orbit.wellness.domain.checkin.CalendarAxisAssociation
+import com.orbit.wellness.domain.checkin.CircularClockSummary
+import com.orbit.wellness.domain.checkin.ContextGroupBalance
 import com.orbit.wellness.domain.checkin.DescriptiveContrast
+import com.orbit.wellness.domain.checkin.NearestOppositeSummary
+import com.orbit.wellness.domain.checkin.OppositeContextMeasure
 import com.orbit.wellness.domain.checkin.EmotionAssociation
 import com.orbit.wellness.domain.checkin.EmotionDistribution
 import com.orbit.wellness.domain.checkin.NumericSummary
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 object BehaviorAssociationCopy {
     const val STATE_MAP_PANE = "State map"
@@ -36,6 +43,12 @@ object BehaviorAssociationCopy {
     const val STARTING_EMOTIONS = "Starting emotions"
     const val ENDING_EMOTIONS = "Ending emotions"
     const val UNITLESS = "Unitless"
+    const val CONTEXT_BALANCE = "Context balance"
+    const val CONTEXT_NOTICE =
+        "These diagnostics show whether present and absent intervals occurred in comparable contexts. " +
+            "Clock summaries describe logged intervals, not exact event times. " +
+            "They do not adjust the association or identify a cause."
+    const val WEAK_CLOCK_MEAN = "Mean clock time is weakly representative."
 }
 
 data class BehaviorAssociationContent(
@@ -61,6 +74,7 @@ data class BehaviorAssociationProfileView(
     val emotions: EmotionPresentation,
     val calendar: CalendarPresentation,
     val quantity: QuantityPresentation,
+    val context: ContextBalancePresentation,
 )
 
 data class SupportPresentation(
@@ -127,6 +141,34 @@ data class CalendarAxisPresentation(
     val unavailable: Boolean,
 )
 
+data class ContextBalancePresentation(
+    val notice: String,
+    val present: ContextGroupPresentation,
+    val absent: ContextGroupPresentation,
+    val nearest: List<NearestGapPresentation>,
+)
+
+data class ContextGroupPresentation(
+    val startClock: String?,
+    val endClock: String?,
+    val midpointClock: String?,
+    val duration: String?,
+    val timeSinceWakeStart: String?,
+    val timeSinceWakeEnd: String?,
+    val startingAxes: List<StartingAxisPresentation>,
+)
+
+data class StartingAxisPresentation(
+    val label: String,
+    val summary: String?,
+)
+
+data class NearestGapPresentation(
+    val label: String,
+    val summary: String?,
+    val unavailablePresentCount: Int,
+)
+
 sealed interface QuantityPresentation {
     data object PresenceOnly : QuantityPresentation
 
@@ -152,7 +194,10 @@ data class UsageUnitPresentation(
     val perHourSpread: String?,
 )
 
-fun BehaviorAssociationDataset.toBehaviorAssociationContent(): BehaviorAssociationContent {
+fun BehaviorAssociationDataset.toBehaviorAssociationContent(
+    balance: BehaviorContextBalanceDataset,
+): BehaviorAssociationContent {
+    val balanceByIdentity = balance.profiles.associateBy { it.identity }
     return BehaviorAssociationContent(
         protocol = protocol,
         notice = BehaviorAssociationCopy.NOTICE,
@@ -160,7 +205,9 @@ fun BehaviorAssociationDataset.toBehaviorAssociationContent(): BehaviorAssociati
         intervalCount = diagnostics.intervalCount,
         calendarDayCount = diagnostics.calendarDayCount,
         excludedIntervalCount = diagnostics.excludedIntervalCount,
-        profiles = profiles.map { it.toProfileView() },
+        profiles = profiles.map { profile ->
+            profile.toProfileView(balanceByIdentity.getValue(profile.identity))
+        },
         emptyMessage = BehaviorAssociationCopy.EMPTY,
     )
 }
@@ -194,7 +241,9 @@ internal fun axisLenses(axis: AxisAssociation): List<AxisLensPresentation> {
     )
 }
 
-private fun BehaviorAssociationProfile.toProfileView(): BehaviorAssociationProfileView {
+private fun BehaviorAssociationProfile.toProfileView(
+    balance: BehaviorContextBalanceProfile,
+): BehaviorAssociationProfileView {
     val kindLabel = identity.kind.kindLabel()
     val intentLabel = identity.intent.intentLabel()
     val displayName = displayNames.joinToString(", ").ifBlank { identity.key }
@@ -222,6 +271,76 @@ private fun BehaviorAssociationProfile.toProfileView(): BehaviorAssociationProfi
         emotions = emotions.toPresentation(),
         calendar = calendarDays.toPresentation(),
         quantity = quantity.toPresentation(),
+        context = balance.toPresentation(),
+    )
+}
+
+internal fun formatClockMinute(minute: Double): String {
+    var rounded = minute.roundToInt() % com.orbit.wellness.domain.checkin.CLOCK_MINUTES_PER_DAY
+    if (rounded < 0) rounded += com.orbit.wellness.domain.checkin.CLOCK_MINUTES_PER_DAY
+    val hour24 = rounded / 60
+    val mins = rounded % 60
+    val suffix = if (hour24 < 12) "AM" else "PM"
+    val hour12 = when (val hour = hour24 % 12) {
+        0 -> 12
+        else -> hour
+    }
+    return String.format(Locale.ROOT, "%d:%02d %s", hour12, mins, suffix)
+}
+
+private fun formatCircularClock(summary: CircularClockSummary?): String? {
+    if (summary == null) return null
+    val base = "${formatClockMinute(summary.meanMinute)} " +
+        "(n=${summary.count}, concentration ${formatAssociationNumber(summary.concentration)})"
+    return if (summary.meanWeaklyRepresentative) {
+        "$base. ${BehaviorAssociationCopy.WEAK_CLOCK_MEAN}"
+    } else {
+        base
+    }
+}
+
+private fun BehaviorContextBalanceProfile.toPresentation(): ContextBalancePresentation {
+    return ContextBalancePresentation(
+        notice = BehaviorAssociationCopy.CONTEXT_NOTICE,
+        present = present.toGroup(),
+        absent = absent.toGroup(),
+        nearest = nearest.map { it.toGap() },
+    )
+}
+
+private fun ContextGroupBalance.toGroup(): ContextGroupPresentation {
+    return ContextGroupPresentation(
+        startClock = formatCircularClock(startClock),
+        endClock = formatCircularClock(endClock),
+        midpointClock = formatCircularClock(midpointClock),
+        duration = durationHours?.let { "${formatMean(it)} h" },
+        timeSinceWakeStart = timeSinceWakeStartHours?.let { "${formatMean(it)} h" },
+        timeSinceWakeEnd = timeSinceWakeEndHours?.let { "${formatMean(it)} h" },
+        startingAxes = startingAxes.map { axis ->
+            StartingAxisPresentation(
+                label = axis.axisId.axisLabel(),
+                summary = axis.summary?.let(::formatMean),
+            )
+        },
+    )
+}
+
+private fun NearestOppositeSummary.toGap(): NearestGapPresentation {
+    val unit = when (measure) {
+        OppositeContextMeasure.END_CLOCK, OppositeContextMeasure.MIDPOINT_CLOCK -> "min"
+        OppositeContextMeasure.STARTING_AXIS_RMS -> "points"
+        OppositeContextMeasure.TIME_SINCE_WAKE, OppositeContextMeasure.DURATION -> "h"
+    }
+    return NearestGapPresentation(
+        label = when (measure) {
+            OppositeContextMeasure.END_CLOCK -> "End-clock gap"
+            OppositeContextMeasure.MIDPOINT_CLOCK -> "Midpoint-clock gap"
+            OppositeContextMeasure.STARTING_AXIS_RMS -> "Starting-state RMS gap"
+            OppositeContextMeasure.TIME_SINCE_WAKE -> "Time-since-wake gap"
+            OppositeContextMeasure.DURATION -> "Duration gap"
+        },
+        summary = distances?.let { "${formatAssociationNumber(it.mean)} $unit (n=${it.count})" },
+        unavailablePresentCount = unavailablePresentCount,
     )
 }
 

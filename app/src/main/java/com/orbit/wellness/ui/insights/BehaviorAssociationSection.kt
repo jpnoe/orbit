@@ -67,6 +67,7 @@ fun BehaviorAssociationSection(
 private fun ProfileDetail(profile: BehaviorAssociationProfileView) {
     var showSpread by remember(profile.identity) { mutableStateOf(false) }
     var showEmotions by remember(profile.identity) { mutableStateOf(false) }
+    var showContext by remember(profile.identity) { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(text = profile.displayName, style = MaterialTheme.typography.titleLarge)
         Text(text = profile.kindLabel, style = MaterialTheme.typography.bodyLarge)
@@ -104,6 +105,12 @@ private fun ProfileDetail(profile: BehaviorAssociationProfileView) {
         }
         CalendarBlock(profile.calendar)
         QuantityBlock(profile.quantity)
+        TextButton(onClick = { showContext = !showContext }) {
+            Text(BehaviorAssociationCopy.CONTEXT_BALANCE)
+        }
+        if (showContext) {
+            ContextBalanceBlock(profile.context)
+        }
     }
 }
 
@@ -171,6 +178,45 @@ private fun CalendarBlock(calendar: CalendarPresentation) {
             if (axis.unavailable) Text(BehaviorAssociationCopy.NOT_ENOUGH_DATA)
         }
     }
+}
+
+@Composable
+private fun ContextBalanceBlock(context: ContextBalancePresentation) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(context.notice, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ContextGroupBlock(BehaviorAssociationCopy.PRESENT, context.present)
+        ContextGroupBlock(BehaviorAssociationCopy.ABSENT, context.absent)
+        context.nearest.forEach { gap ->
+            Text(text = gap.label, style = MaterialTheme.typography.labelLarge)
+            if (gap.summary != null) {
+                Text(gap.summary)
+            } else {
+                Text(BehaviorAssociationCopy.NOT_ENOUGH_DATA)
+            }
+            Text("Unavailable present intervals ${gap.unavailablePresentCount}")
+        }
+    }
+}
+
+@Composable
+private fun ContextGroupBlock(side: String, group: ContextGroupPresentation) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(text = side, style = MaterialTheme.typography.titleMedium)
+        ContextLine("Start", group.startClock)
+        ContextLine("End", group.endClock)
+        ContextLine("Midpoint", group.midpointClock)
+        ContextLine("Duration", group.duration)
+        ContextLine("Time since wake at start", group.timeSinceWakeStart)
+        ContextLine("Time since wake at end", group.timeSinceWakeEnd)
+        group.startingAxes.forEach { axis ->
+            ContextLine(axis.label, axis.summary)
+        }
+    }
+}
+
+@Composable
+private fun ContextLine(label: String, value: String?) {
+    Text("$label ${value ?: BehaviorAssociationCopy.NOT_ENOUGH_DATA}")
 }
 
 @Composable
