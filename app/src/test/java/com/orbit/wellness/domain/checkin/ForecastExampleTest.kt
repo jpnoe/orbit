@@ -336,6 +336,244 @@ class ForecastExampleTest {
     }
 
     @Test
+    fun supervisedExamplesAreRetrospectiveWhileTheirInputsStayPastOnly() {
+        val bundle = projectForecastExamples(history())
+        listOf(bundle.stateForecasts, bundle.conditionalTransitions).forEach { dataset ->
+            val retrospective = when (dataset) {
+                is StateForecastExampleDataset -> dataset.retrospective
+                is ConditionalTransitionExampleDataset -> dataset.retrospective
+                else -> error("Unexpected dataset")
+            }
+            val inputPastOnly = when (dataset) {
+                is StateForecastExampleDataset -> dataset.inputPastOnly
+                is ConditionalTransitionExampleDataset -> dataset.inputPastOnly
+                else -> error("Unexpected dataset")
+            }
+            val containsOutcome = when (dataset) {
+                is StateForecastExampleDataset -> dataset.containsOutcome
+                is ConditionalTransitionExampleDataset -> dataset.containsOutcome
+                else -> error("Unexpected dataset")
+            }
+            val strict = when (dataset) {
+                is StateForecastExampleDataset -> dataset.strictAsKnownAvailability
+                is ConditionalTransitionExampleDataset -> dataset.strictAsKnownAvailability
+                else -> error("Unexpected dataset")
+            }
+            val mode = when (dataset) {
+                is StateForecastExampleDataset -> dataset.availabilityMode
+                is ConditionalTransitionExampleDataset -> dataset.availabilityMode
+                else -> error("Unexpected dataset")
+            }
+            assertTrue(inputPastOnly)
+            assertTrue(retrospective)
+            assertTrue(containsOutcome)
+            assertFalse(strict)
+            assertEquals(ObservationAvailabilityMode.EVENT_TIME_RECONSTRUCTION, mode)
+        }
+        assertEquals("state-forecast-example-v2", STATE_FORECAST_EXAMPLE_PROTOCOL)
+        assertEquals("conditional-transition-example-v2", CONDITIONAL_TRANSITION_EXAMPLE_PROTOCOL)
+        assertFalse(bundle.stateForecasts.predictive)
+        assertFalse(bundle.stateForecasts.updatesModel)
+        assertFalse(bundle.conditionalTransitions.predictive)
+        assertFalse(bundle.conditionalTransitions.updatesModel)
+        assertFalse(fields(StateForecastExampleDataset::class.java).contains("pastOnly"))
+        assertFalse(fields(ConditionalTransitionExampleDataset::class.java).contains("pastOnly"))
+        assertEquals(listOf("stateSide", "observation"), fields(StateForecastInput::class.java))
+        bundle.stateForecasts.examples.zip(bundle.conditionalTransitions.examples).forEach { (state, conditional) ->
+            assertEquals(state.identity, conditional.identity)
+            assertSame(state.input, conditional.input)
+            assertSame(state.target, conditional.target)
+            assertEquals(state.targetConflicts, conditional.targetConflicts)
+            assertEquals(state.gaps, conditional.gaps)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            StateForecastExampleDataset(inputPastOnly = false, examples = emptyList())
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            StateForecastExampleDataset(retrospective = false, examples = emptyList())
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            StateForecastExampleDataset(containsOutcome = false, examples = emptyList())
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            StateForecastExampleDataset(strictAsKnownAvailability = true, examples = emptyList())
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ConditionalTransitionExampleDataset(predictive = true, examples = emptyList())
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ConditionalTransitionExampleDataset(updatesModel = true, examples = emptyList())
+        }
+    }
+
+    @Test
+    fun scenarioIntervalsMatchZoneFreeEvidence() {
+        val data = history()
+        val graph = projectAlternatingTemporalGraph(data)
+        val intervals = projectIntervalBehaviorEvidence(graph, data)
+        assertEquals(projectBehavioralEvidence(graph, data, ZoneId.of("UTC")).intervals, intervals)
+        assertEquals(
+            projectBehavioralEvidence(graph, data, ZoneId.of("America/Los_Angeles")).intervals,
+            intervals,
+        )
+        val bundle = projectForecastExamples(data)
+        bundle.conditionalTransitions.examples.forEach { example ->
+            val evidence = intervals.single { candidate ->
+                candidate.key == example.scenario.transitionKey &&
+                    candidate.startAt == example.scenario.clock!!.startAt &&
+                    candidate.startBasis == example.scenario.clock.startBasis
+            }
+            assertEquals(evidence.activityReview, example.scenario.activity)
+            assertEquals(evidence.workoutReview, example.scenario.workout)
+            assertEquals(evidence.dietReview, example.scenario.diet)
+            assertEquals(evidence.usageReview, example.scenario.usage)
+            assertEquals(evidence.exposures, example.scenario.exposures)
+            assertEquals(evidence.durationMillis, example.scenario.span.millis)
+            assertEquals(evidence.startStateKey, example.scenario.anchorKey)
+        }
+        val source = source(
+            "src/main/java/com/orbit/wellness/domain/checkin/ForecastExample.kt",
+            "app/src/main/java/com/orbit/wellness/domain/checkin/ForecastExample.kt",
+        ).readText()
+        assertFalse(source.contains("ZoneId"))
+        assertFalse(source.contains("calendarDays"))
+        assertFalse(source.contains("BEHAVIOR_CATALOG_SCOPE"))
+    }
+
+    @Test
+    fun constructorsRejectUnpairedExamplesAndMixedProvenance() {
+        val projected = projectForecastExamples(history())
+        val recorded = projected.stateForecasts.examples.single { it.identity.transitionId == "end" }
+        val unresolved = projectForecastExamples(
+            dataset(
+                states = listOf(point("end", HOUR, mood = 0)),
+                intervals = listOf(interval("end", "missing", 0, HOUR, CheckInContextStartBasis.PREVIOUS_CHECK_IN)),
+            ),
+        ).stateForecasts.examples.single()
+        assertNull(unresolved.input)
+        assertTrue(CausalIneligibilityReason.START_UNRESOLVED in unresolved.gaps)
+        val boundaryWithoutStart = unresolved.copy(gaps = listOf(CausalIneligibilityReason.BOUNDARY_INTERVAL))
+        assertNull(boundaryWithoutStart.input)
+        assertFalse(boundaryWithoutStart.available)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            ExampleIdentity(
+                transitionId = recorded.identity.transitionId,
+                anchorKey = recorded.identity.anchorKey,
+                anchorAt = null,
+                endingKey = recorded.identity.endingKey,
+                endingAt = recorded.identity.endingAt,
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ExampleIdentity(
+                transitionId = recorded.identity.transitionId,
+                anchorKey = null,
+                anchorAt = recorded.identity.anchorAt,
+                endingKey = recorded.identity.endingKey,
+                endingAt = recorded.identity.endingAt,
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) { recorded.copy(input = null) }
+        assertThrows(IllegalArgumentException::class.java) { unresolved.copy(input = recorded.input) }
+        assertThrows(IllegalArgumentException::class.java) { unresolved.copy(gaps = emptyList()) }
+        assertThrows(IllegalArgumentException::class.java) {
+            recorded.copy(gaps = listOf(CausalIneligibilityReason.START_UNRESOLVED))
+        }
+
+        val scenario = projected.conditionalTransitions.examples.single { it.identity.transitionId == "end" }.scenario
+        val sandbox = sandboxTransitionScenario(
+            SandboxScenarioRequest(anchorKey = StateOccurrenceKey("wake"), horizonMillis = HOUR),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            scenario.copy(span = ScenarioSpan(scenario.span.millis, ScenarioProvenance.SANDBOX_SPECIFIED))
+        }
+        assertThrows(IllegalArgumentException::class.java) { scenario.copy(clock = null) }
+        assertThrows(IllegalArgumentException::class.java) { scenario.copy(transitionKey = null) }
+        assertThrows(IllegalArgumentException::class.java) {
+            sandbox.copy(transitionKey = TransitionOccurrenceKey("end"))
+        }
+        assertThrows(IllegalArgumentException::class.java) { sandbox.copy(clock = scenario.clock) }
+        assertThrows(IllegalArgumentException::class.java) { sandbox.copy(anchorKey = null) }
+        assertThrows(IllegalArgumentException::class.java) {
+            sandbox.copy(span = ScenarioSpan(0, ScenarioProvenance.SANDBOX_SPECIFIED))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            sandbox.copy(span = ScenarioSpan(HOUR, ScenarioProvenance.RECORDED_REALIZED))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            projected.conditionalTransitions.examples.first().copy(scenario = sandbox)
+        }
+
+        assertThrows(IllegalArgumentException::class.java) {
+            projected.copy(
+                conditionalTransitions = projected.conditionalTransitions.copy(
+                    examples = projected.conditionalTransitions.examples.map { example ->
+                        if (example.identity.transitionId == "end") {
+                            example.copy(target = ObservedAxisTarget(example.target.readings))
+                        } else {
+                            example
+                        }
+                    },
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            projected.copy(
+                conditionalTransitions = projected.conditionalTransitions.copy(
+                    examples = projected.conditionalTransitions.examples.map { example ->
+                        val input = example.input
+                        if (example.identity.transitionId == "end" && input != null) {
+                            example.copy(input = StateForecastInput(input.stateSide, input.observation))
+                        } else {
+                            example
+                        }
+                    },
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            projected.copy(
+                conditionalTransitions = projected.conditionalTransitions.copy(
+                    examples = projected.conditionalTransitions.examples.map { example ->
+                        if (example.identity.transitionId == "end") {
+                            example.copy(gaps = example.gaps + CausalIneligibilityReason.INCOMPLETE_CONTEXT)
+                        } else {
+                            example
+                        }
+                    },
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            projected.copy(
+                conditionalTransitions = projected.conditionalTransitions.copy(
+                    examples = projected.conditionalTransitions.examples.map { example ->
+                        if (example.identity.transitionId == "end") {
+                            example.copy(targetConflicts = listOf(DefaultCheckInAxes.ENERGY))
+                        } else {
+                            example
+                        }
+                    },
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            projected.copy(
+                conditionalTransitions = projected.conditionalTransitions.copy(
+                    examples = projected.conditionalTransitions.examples.map { example ->
+                        if (example.identity.transitionId == "end") {
+                            example.copy(identity = example.identity.copy(endingKey = StateOccurrenceKey("other")))
+                        } else {
+                            example
+                        }
+                    },
+                ),
+            )
+        }
+    }
+
+    @Test
     fun examplesDoNotLearnWeightsOrEnterReleaseNavigation() {
         val bundle = projectForecastExamples(history())
         assertFalse(bundle.stateForecasts.predictive)

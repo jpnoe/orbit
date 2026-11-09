@@ -41,16 +41,7 @@ fun projectBehavioralEvidence(
     dataset: CheckInAnalysisDatasetV2,
     zone: ZoneId,
 ): BehavioralEvidenceDataset {
-    val evidence = projectContextualEvidence(graph)
-    val steps = graph.causalSteps.associateBy { it.input.transitionId }
-    val states = dataset.states.associateBy { StateOccurrenceKey(it.checkInId) }
-    val intervals = evidence.retrospectiveTransitions.map { link ->
-        intervalEvidence(
-            link = link,
-            eligibility = steps.getValue(link.frame.key.raw).eligibility,
-            states = states,
-        )
-    }.sortedWith(compareBy({ it.endAt }, { it.startAt }, { it.key.raw }))
+    val intervals = projectIntervalBehaviorEvidence(graph, dataset)
     val catalog = catalogFrom(intervals)
     val unplaced = intervals
         .filter { it.startAt > it.endAt }
@@ -66,6 +57,29 @@ fun projectBehavioralEvidence(
         calendarDays = days,
         unplacedIntervalKeys = unplaced,
     )
+}
+
+/**
+ * Interval rows from [projectBehavioralEvidence], without a zone, a calendar-day
+ * rollup, or the full-history catalog.
+ *
+ * The list is what [projectBehavioralEvidence] stores as its intervals. Category
+ * knowledge and usage quantities still come from that one classification.
+ */
+internal fun projectIntervalBehaviorEvidence(
+    graph: AlternatingTemporalGraph,
+    dataset: CheckInAnalysisDatasetV2,
+): List<IntervalBehaviorEvidence> {
+    val evidence = projectContextualEvidence(graph)
+    val steps = graph.causalSteps.associateBy { it.input.transitionId }
+    val states = dataset.states.associateBy { StateOccurrenceKey(it.checkInId) }
+    return evidence.retrospectiveTransitions.map { link ->
+        intervalEvidence(
+            link = link,
+            eligibility = steps.getValue(link.frame.key.raw).eligibility,
+            states = states,
+        )
+    }.sortedWith(compareBy({ it.endAt }, { it.startAt }, { it.key.raw }))
 }
 
 private fun intervalEvidence(

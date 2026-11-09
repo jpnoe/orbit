@@ -1,28 +1,28 @@
 package com.orbit.wellness.domain.checkin
 
-import java.time.ZoneId
-
 /**
  * Gate-ready examples built from one check-in snapshot.
  *
- * [StateForecastExample] carries only the starting check-in. Its ending
- * [ObservedAxisTarget] is held beside that input. A missing axis stays on the
- * target, and a conflicting axis is named beside it so conflict is not treated
- * as ordinary missingness. A recorded zero stays zero.
+ * The state input is past-only. The complete example is retrospective: it holds
+ * an ending [ObservedAxisTarget] beside that input, and a conditional example
+ * also holds the transition that was reported. Membership still follows stored
+ * event time, so strict as-known availability stays false.
  *
- * [ConditionalTransitionExample] adds a sanitized scenario. Recorded scenarios
- * describe what was reported on a completed interval. They are not claimed to
- * have been known at the anchor. A sandbox scenario is built only when a caller
- * supplies one, and it is not inserted into this recorded projection or into
- * the walk-forward aggregate.
+ * A missing axis stays on the target, and a conflicting axis is named beside it
+ * so conflict is not treated as ordinary missingness. A recorded zero stays zero.
  *
- * The projection reuses one graph, one trajectory, the state-side bundle, and
- * the observation-process contexts. It does not fit a weight, update a model,
- * or write Room.
+ * Recorded scenarios describe what was reported on an interval. They are not
+ * claimed to have been known at the anchor. A sandbox scenario is built only
+ * when a caller supplies one, and it is not inserted into this recorded
+ * projection or into the walk-forward aggregate.
+ *
+ * The projection reuses one graph, one trajectory, the state-side bundle, the
+ * observation-process contexts, and the zone-free interval evidence. It does
+ * not fit a coefficient, update a model, or write Room.
  */
-const val STATE_FORECAST_EXAMPLE_PROTOCOL = "state-forecast-example-v1"
+const val STATE_FORECAST_EXAMPLE_PROTOCOL = "state-forecast-example-v2"
 
-const val CONDITIONAL_TRANSITION_EXAMPLE_PROTOCOL = "conditional-transition-example-v1"
+const val CONDITIONAL_TRANSITION_EXAMPLE_PROTOCOL = "conditional-transition-example-v2"
 
 enum class ScenarioProvenance {
     /** Reported on the completed interval. Retrospective, not known-at-anchor. */
@@ -37,8 +37,20 @@ data class ExampleIdentity(
     val anchorAt: Long?,
     val endingKey: StateOccurrenceKey,
     val endingAt: Long,
-)
+) {
+    init {
+        require((anchorKey == null) == (anchorAt == null)) {
+            "An anchor key and its time stay together"
+        }
+    }
+}
 
+/**
+ * Information available from the starting check-in.
+ *
+ * The ending target, the outgoing interval, and any scenario stay beside this
+ * object. They are not fields of it.
+ */
 data class StateForecastInput(
     val stateSide: CausalStateSide,
     val observation: ObservationProcessContext,
@@ -48,6 +60,7 @@ data class StateForecastInput(
             "The forecast input pairs one state with its observation process"
         }
         require(stateSide.focal.recordedAt == observation.recordedAt)
+        require(stateSide.focal.checkInId == observation.stateKey.raw)
     }
 }
 
@@ -62,14 +75,7 @@ data class StateForecastExample(
         get() = gaps.isEmpty()
 
     init {
-        require((input == null) == (identity.anchorKey == null))
-        require(input == null || input.stateSide.trajectory.stateKey == identity.anchorKey)
-        require(input == null || input.observation.recordedAt == identity.anchorAt)
-        require(targetConflicts == targetConflicts.distinct())
-        require(targetConflicts.all { it in CheckInAnalysisDatasetV2.CORE_AXIS_IDS })
-        targetConflicts.forEach { axisId ->
-            require(target.reading(axisId).raw == null) { "A conflicting target axis has no raw value" }
-        }
+        requireForecastExample(identity, input, target, targetConflicts, gaps)
     }
 }
 
@@ -139,7 +145,9 @@ data class ConditionalTransitionExample(
         require(scenario.provenance == ScenarioProvenance.RECORDED_REALIZED) {
             "Recorded conditional examples do not absorb a sandbox scenario"
         }
+        require(scenario.span.provenance == ScenarioProvenance.RECORDED_REALIZED)
         require(scenario.transitionKey?.raw == identity.transitionId)
+        requireForecastExample(identity, input, target, targetConflicts, gaps)
     }
 }
 
@@ -175,7 +183,11 @@ data class ForecastExampleSummary(
 
 data class StateForecastExampleDataset(
     val protocol: String = STATE_FORECAST_EXAMPLE_PROTOCOL,
-    val pastOnly: Boolean = true,
+    val inputPastOnly: Boolean = true,
+    val retrospective: Boolean = true,
+    val containsOutcome: Boolean = true,
+    val availabilityMode: ObservationAvailabilityMode = ObservationAvailabilityMode.EVENT_TIME_RECONSTRUCTION,
+    val strictAsKnownAvailability: Boolean = false,
     val predictive: Boolean = false,
     val suitableForRecommendation: Boolean = false,
     val updatesModel: Boolean = false,
@@ -183,16 +195,27 @@ data class StateForecastExampleDataset(
 ) {
     init {
         require(protocol == STATE_FORECAST_EXAMPLE_PROTOCOL)
-        require(pastOnly && !predictive && !suitableForRecommendation && !updatesModel) {
-            "State-forecast examples are not a fitted forecast"
-        }
+        requireExampleContract(
+            inputPastOnly = inputPastOnly,
+            retrospective = retrospective,
+            containsOutcome = containsOutcome,
+            availabilityMode = availabilityMode,
+            strictAsKnownAvailability = strictAsKnownAvailability,
+            predictive = predictive,
+            suitableForRecommendation = suitableForRecommendation,
+            updatesModel = updatesModel,
+        )
         require(examplesAreOrdered(examples.map { it.identity }))
     }
 }
 
 data class ConditionalTransitionExampleDataset(
     val protocol: String = CONDITIONAL_TRANSITION_EXAMPLE_PROTOCOL,
-    val pastOnly: Boolean = true,
+    val inputPastOnly: Boolean = true,
+    val retrospective: Boolean = true,
+    val containsOutcome: Boolean = true,
+    val availabilityMode: ObservationAvailabilityMode = ObservationAvailabilityMode.EVENT_TIME_RECONSTRUCTION,
+    val strictAsKnownAvailability: Boolean = false,
     val predictive: Boolean = false,
     val suitableForRecommendation: Boolean = false,
     val updatesModel: Boolean = false,
@@ -200,9 +223,16 @@ data class ConditionalTransitionExampleDataset(
 ) {
     init {
         require(protocol == CONDITIONAL_TRANSITION_EXAMPLE_PROTOCOL)
-        require(pastOnly && !predictive && !suitableForRecommendation && !updatesModel) {
-            "Conditional examples are not a fitted transition model"
-        }
+        requireExampleContract(
+            inputPastOnly = inputPastOnly,
+            retrospective = retrospective,
+            containsOutcome = containsOutcome,
+            availabilityMode = availabilityMode,
+            strictAsKnownAvailability = strictAsKnownAvailability,
+            predictive = predictive,
+            suitableForRecommendation = suitableForRecommendation,
+            updatesModel = updatesModel,
+        )
         require(examplesAreOrdered(examples.map { it.identity }))
         require(examples.all { it.scenario.provenance == ScenarioProvenance.RECORDED_REALIZED })
     }
@@ -216,7 +246,14 @@ data class ForecastExampleBundle(
     val summary: ForecastExampleSummary,
 ) {
     init {
-        require(stateForecasts.examples.map { it.identity } == conditionalTransitions.examples.map { it.identity })
+        require(stateForecasts.examples.size == conditionalTransitions.examples.size)
+        stateForecasts.examples.zip(conditionalTransitions.examples).forEach { (state, conditional) ->
+            require(conditional.identity == state.identity)
+            require(conditional.input === state.input) { "Paired examples share one state input" }
+            require(conditional.target === state.target) { "Paired examples share one ending target" }
+            require(conditional.targetConflicts == state.targetConflicts)
+            require(conditional.gaps == state.gaps)
+        }
         require(summary.stateExampleCount == stateForecasts.examples.size)
         require(summary.conditionalExampleCount == conditionalTransitions.examples.size)
         require(summary == summarizeExamples(stateForecasts.examples, conditionalTransitions.examples))
@@ -239,12 +276,12 @@ fun projectForecastExamples(dataset: CheckInAnalysisDatasetV2): ForecastExampleB
     val stateSide = projectCausalStateSide(dataset, trajectory)
     val observation = projectObservationProcess(dataset, trajectory)
     val walkForward = walkForwardFrom(graph, stateSide)
-    val behavior = projectBehavioralEvidence(graph, dataset, SCENARIO_ZONE)
+    val intervals = projectIntervalBehaviorEvidence(graph, dataset)
     val stateExamples = graph.causalSteps.map { step ->
         stateExample(step, stateSide, observation)
     }
     val conditional = graph.causalSteps.zip(stateExamples).map { (step, state) ->
-        conditionalExample(step, state, behavior.intervals)
+        conditionalExample(step, state, intervals)
     }
     return ForecastExampleBundle(
         walkForward = walkForward,
@@ -376,9 +413,56 @@ private fun summarizeExamples(
     )
 }
 
+private fun requireForecastExample(
+    identity: ExampleIdentity,
+    input: StateForecastInput?,
+    target: ObservedAxisTarget,
+    targetConflicts: List<String>,
+    gaps: List<CausalIneligibilityReason>,
+) {
+    require((input == null) == (identity.anchorKey == null)) {
+        "A null state input is an unresolved start"
+    }
+    require(input == null || input.stateSide.trajectory.stateKey == identity.anchorKey)
+    require(input == null || input.observation.recordedAt == identity.anchorAt)
+    require(input != null || gaps.isNotEmpty()) {
+        "An unresolved start stays unavailable"
+    }
+    require(CausalIneligibilityReason.START_UNRESOLVED !in gaps || input == null) {
+        "An unresolved-start reason has no state input"
+    }
+    require(targetConflicts == targetConflicts.distinct())
+    require(targetConflicts.all { it in CheckInAnalysisDatasetV2.CORE_AXIS_IDS })
+    targetConflicts.forEach { axisId ->
+        require(target.reading(axisId).raw == null) { "A conflicting target axis has no raw value" }
+    }
+}
+
+private fun requireExampleContract(
+    inputPastOnly: Boolean,
+    retrospective: Boolean,
+    containsOutcome: Boolean,
+    availabilityMode: ObservationAvailabilityMode,
+    strictAsKnownAvailability: Boolean,
+    predictive: Boolean,
+    suitableForRecommendation: Boolean,
+    updatesModel: Boolean,
+) {
+    require(inputPastOnly && retrospective && containsOutcome) {
+        "The state input is past-only and the complete example is retrospective"
+    }
+    require(availabilityMode == ObservationAvailabilityMode.EVENT_TIME_RECONSTRUCTION) {
+        "These examples reconstruct membership from stored event time"
+    }
+    require(!strictAsKnownAvailability) {
+        "Stored event time is not a record of when each value first became known"
+    }
+    require(!predictive && !suitableForRecommendation && !updatesModel) {
+        "These examples are not a fitted forecast"
+    }
+}
+
 private fun examplesAreOrdered(identities: List<ExampleIdentity>): Boolean {
     val keys = identities.map { it.endingAt to it.transitionId }
     return keys == keys.sortedWith(compareBy({ it.first }, { it.second }))
 }
-
-private val SCENARIO_ZONE: ZoneId = ZoneId.of("UTC")
