@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.orbit.wellness.data.CheckInAnalysisRepository
+import com.orbit.wellness.domain.checkin.ObservationProcessDataset
 import com.orbit.wellness.domain.checkin.WalkForwardProjection
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -13,7 +14,10 @@ import kotlinx.coroutines.flow.stateIn
 sealed interface WalkForwardUiState {
     data object Loading : WalkForwardUiState
 
-    data class Ready(val projection: WalkForwardProjection) : WalkForwardUiState
+    data class Ready(
+        val projection: WalkForwardProjection,
+        val observationProcess: ObservationProcessDataset,
+    ) : WalkForwardUiState
 }
 
 /**
@@ -26,7 +30,9 @@ class WalkForwardViewModel(
     analysis: CheckInAnalysisRepository,
 ) : ViewModel() {
     val uiState: StateFlow<WalkForwardUiState> = observeWalkForward(analysis.observeSnapshot())
-        .map<WalkForwardProjection, WalkForwardUiState> { WalkForwardUiState.Ready(it) }
+        .map<PredictionLabSnapshot, WalkForwardUiState> { snapshot ->
+            WalkForwardUiState.Ready(snapshot.walkForward, snapshot.observationProcess)
+        }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),

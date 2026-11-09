@@ -2,7 +2,9 @@ package com.orbit.wellness.ui.insights
 
 import com.orbit.wellness.data.CheckInAnalysisSnapshot
 import com.orbit.wellness.domain.checkin.CheckInAnalysisDatasetV2
+import com.orbit.wellness.domain.checkin.ObservationProcessDataset
 import com.orbit.wellness.domain.checkin.WalkForwardProjection
+import com.orbit.wellness.domain.checkin.projectObservationProcess
 import com.orbit.wellness.domain.checkin.projectWalkForward
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -12,8 +14,14 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.mapLatest
 
+data class PredictionLabSnapshot(
+    val walkForward: WalkForwardProjection,
+    val observationProcess: ObservationProcessDataset,
+)
+
 /**
- * Projects one check-in snapshot into recorded walk-forward attempts.
+ * Projects one check-in snapshot into recorded walk-forward attempts and the
+ * separate observation-process contexts.
  *
  * Equal snapshots are skipped. A newer snapshot cancels an older projection.
  * The work runs on [computation], off the main thread. Replay position and
@@ -26,9 +34,14 @@ fun observeWalkForward(
     project: suspend (CheckInAnalysisDatasetV2) -> WalkForwardProjection = { dataset ->
         projectWalkForward(dataset)
     },
-): Flow<WalkForwardProjection> {
+): Flow<PredictionLabSnapshot> {
     return snapshots
         .distinctUntilChanged()
-        .mapLatest { snapshot -> project(snapshot.dataset) }
+        .mapLatest { snapshot ->
+            PredictionLabSnapshot(
+                walkForward = project(snapshot.dataset),
+                observationProcess = projectObservationProcess(snapshot.dataset),
+            )
+        }
         .flowOn(computation)
 }

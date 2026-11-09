@@ -24,7 +24,12 @@ import com.orbit.wellness.domain.checkin.BaselineKind
 import com.orbit.wellness.domain.checkin.CausalStateSide
 import com.orbit.wellness.domain.checkin.CausalStateSideDataset
 import com.orbit.wellness.domain.checkin.EvidenceOrigin
+import com.orbit.wellness.domain.checkin.FocalAxisStatus
 import com.orbit.wellness.domain.checkin.ForecastEvidence
+import com.orbit.wellness.domain.checkin.ObservationProcessContext
+import com.orbit.wellness.domain.checkin.ObservationProcessDataset
+import com.orbit.wellness.domain.checkin.ObservationSampling
+import com.orbit.wellness.domain.checkin.ObservationSamplingId
 import com.orbit.wellness.domain.checkin.ObservableForecast
 import com.orbit.wellness.domain.checkin.OverflowDirection
 import com.orbit.wellness.domain.checkin.RecentMeanChoice
@@ -79,6 +84,7 @@ fun PredictionResearchPane(walkForwardViewModel: WalkForwardViewModel) {
         WalkForwardUiState.Loading -> InlineLoading()
         is WalkForwardUiState.Ready -> PredictionLab(
             projection = state.projection,
+            observationProcess = state.observationProcess,
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -87,6 +93,7 @@ fun PredictionResearchPane(walkForwardViewModel: WalkForwardViewModel) {
 @Composable
 private fun PredictionLab(
     projection: com.orbit.wellness.domain.checkin.WalkForwardProjection,
+    observationProcess: ObservationProcessDataset,
     modifier: Modifier = Modifier,
 ) {
     var mode by remember { mutableStateOf(PredictionLabMode.REPLAY) }
@@ -105,14 +112,21 @@ private fun PredictionLab(
             )
         }
         when (mode) {
-            PredictionLabMode.REPLAY -> RecordedReplayPane(projection)
-            PredictionLabMode.SANDBOX -> PredictionSandboxPane(projection.anchors, projection.stateSide)
+            PredictionLabMode.REPLAY -> RecordedReplayPane(projection, observationProcess)
+            PredictionLabMode.SANDBOX -> PredictionSandboxPane(
+                projection.anchors,
+                projection.stateSide,
+                observationProcess,
+            )
         }
     }
 }
 
 @Composable
-private fun RecordedReplayPane(projection: com.orbit.wellness.domain.checkin.WalkForwardProjection) {
+private fun RecordedReplayPane(
+    projection: com.orbit.wellness.domain.checkin.WalkForwardProjection,
+    observationProcess: ObservationProcessDataset,
+) {
     val evaluation = projection.evaluation
     var showMetrics by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -132,9 +146,11 @@ private fun RecordedReplayPane(projection: com.orbit.wellness.domain.checkin.Wal
                 }
             }
             Text("Transition ${attempt.transitionId}. Anchor ${attempt.anchorKey.raw}.")
+            val anchorKey = attempt.anchorKey
             AttemptForecasts(
                 attempt = attempt,
-                side = projection.stateSide.states.single { it.trajectory.stateKey == attempt.anchorKey },
+                side = projection.stateSide.states.single { it.trajectory.stateKey == anchorKey },
+                observation = observationProcess.contexts.single { it.stateKey == anchorKey },
             )
         }
         TextButton(onClick = { showMetrics = !showMetrics }) {
@@ -148,6 +164,7 @@ private fun RecordedReplayPane(projection: com.orbit.wellness.domain.checkin.Wal
 private fun PredictionSandboxPane(
     anchors: List<StateTrajectoryContext>,
     stateSide: CausalStateSideDataset,
+    observationProcess: ObservationProcessDataset,
 ) {
     var session by remember { mutableStateOf(SandboxSession.fresh()) }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -155,7 +172,7 @@ private fun PredictionSandboxPane(
         if (anchors.isEmpty()) {
             Text(PredictionLabCopy.NO_ANCHORS)
         } else {
-            SandboxEditors(anchors, stateSide, session) { session = it }
+            SandboxEditors(anchors, stateSide, observationProcess, session) { session = it }
         }
     }
 }
@@ -164,6 +181,7 @@ private fun PredictionSandboxPane(
 private fun SandboxEditors(
     anchors: List<StateTrajectoryContext>,
     stateSide: CausalStateSideDataset,
+    observationProcess: ObservationProcessDataset,
     session: SandboxSession,
     onSession: (SandboxSession) -> Unit,
 ) {
@@ -251,6 +269,9 @@ private fun SandboxEditors(
             records.forEach { record -> ForecastRow(record) }
         }
         TrajectoryGroups(side, forecast.horizonPreviews)
+        ObservationProcessGroup(
+            observationProcess.contexts.single { it.stateKey == anchor.stateKey },
+        )
         if (forecast.syntheticTarget != null) {
             Text(PredictionLabCopy.LOCAL_ERROR)
             forecast.predictions.filter { it.residual != null }.forEach { record ->
@@ -293,6 +314,7 @@ private fun SandboxEditor(
 private fun AttemptForecasts(
     attempt: WalkForwardAttempt,
     side: CausalStateSide,
+    observation: ObservationProcessContext,
 ) {
     Text(PredictionLabCopy.RESIDUAL)
     Text(PredictionLabCopy.EXPERTS)
@@ -306,6 +328,7 @@ private fun AttemptForecasts(
         }
     }
     TrajectoryGroups(side)
+    ObservationProcessGroup(observation)
 }
 
 @Composable
@@ -477,9 +500,14 @@ internal fun expertCompactLabel(expert: TrajectoryExpert, deviation: BackgroundD
     val compared = deviation?.currentMinusBackgroundMean?.let {
         " · current minus background mean ${formatBaselineValue(it)}"
     }.orEmpty()
-    return "$name · $continuity · slope ${formatBaselineValue(slope)} · " +
+    val twoPoint = if (expert.observedCount == 2) {
+        " · two points determine a line and cannot establish trend stability"
+    } else {
+        ""
+    }
+    return "$name · $continuity · slope ${formatBaselineValue(slope)} points/hour · " +
         "${expert.observedCount} observations · ${expert.distinctTimestampCount} times · " +
-        "span $span h · fit $noise$compared"
+        "span $span h · residual spread $noise$twoPoint$compared"
 }
 
 internal fun expertTechnicalLabel(expert: TrajectoryExpert): String {
@@ -496,6 +524,82 @@ internal fun expertTechnicalLabel(expert: TrajectoryExpert): String {
     val keys = expert.occurrenceKeys.joinToString(", ") { it.raw }
     return "$stats · $focal$breakText$delta · states $keys"
 }
+
+@Composable
+private fun ObservationProcessGroup(context: ObservationProcessContext) {
+    var open by remember(context.stateKey) { mutableStateOf(false) }
+    TextButton(onClick = { open = !open }) {
+        Text("Observation process")
+    }
+    if (open) {
+        Text("Counts of earlier check-ins. A later edit to an earlier timestamp can change this reconstruction.")
+        Text(focalObservationLabel(context))
+        context.samplings.forEach { sampling ->
+            var technical by remember(context.stateKey, sampling.sampling) { mutableStateOf(false) }
+            Text(observationCompactLabel(sampling))
+            TextButton(onClick = { technical = !technical }) {
+                Text("Technical details")
+            }
+            if (technical) Text(observationTechnicalLabel(context, sampling))
+        }
+    }
+}
+
+internal fun focalObservationLabel(context: ObservationProcessContext): String {
+    val recorded = context.axes.count { it.status == FocalAxisStatus.RECORDED }
+    val missing = context.axes.count { it.status == FocalAxisStatus.MISSING }
+    val conflicting = context.axes.count { it.status == FocalAxisStatus.CONFLICTING }
+    val trigger = context.trigger.ifEmpty { "blank" }
+    val emotion = if (context.emotionPresent) "emotion recorded" else "emotion absent"
+    return "Focal · trigger $trigger · recorded axes $recorded · missing axes $missing · " +
+        "conflicting axes $conflicting · $emotion"
+}
+
+internal fun observationCompactLabel(sampling: ObservationSampling): String {
+    val name = samplingLabel(sampling.sampling)
+    val observable = sampling.effectiveObservableDurationMillis?.let { "observable ${hours(it)} h" } ?: "observable unavailable"
+    val since = sampling.timeSinceLatestMillis?.let { "since latest ${hours(it)} h" } ?: "no earlier observation"
+    val gaps = sampling.gaps?.let { "gaps ${it.count}" } ?: "gaps unavailable"
+    val rate = sampling.observationRatePerHour?.let { "rate ${formatBaselineValue(it)}/h" } ?: "rate unavailable"
+    val coverage = sampling.coverageFraction?.let { " · coverage ${formatBaselineValue(it)}" }.orEmpty()
+    return "$name · ${sampling.observationCount} observations · ${sampling.distinctTimestampCount} times · " +
+        "${sampling.duplicateTimestampCount} duplicate times · $observable$coverage · $since · $gaps · $rate"
+}
+
+internal fun observationTechnicalLabel(context: ObservationProcessContext, sampling: ObservationSampling): String {
+    val requested = sampling.requestedDurationMillis?.let { "requested ${it} ms" } ?: "no requested window"
+    val history = "history from ${sampling.historyAvailableFrom}"
+    val span = "earliest ${sampling.earliestAt ?: "none"} · latest ${sampling.latestAt ?: "none"}"
+    val gaps = sampling.gaps?.let { gap ->
+        "gaps mean ${gap.meanMillis} ms · deviation ${gap.deviationMillis} ms · median ${gap.medianMillis} ms · " +
+            "min ${gap.minimumMillis} ms · max ${gap.maximumMillis} ms"
+    } ?: "gaps unavailable"
+    val axes = sampling.axes.joinToString(" · ") { axis ->
+        "${axisLabel(axis.axisId)} recorded ${axis.recordedCount} · missing ${axis.missingCount} · conflicting ${axis.conflictingCount}"
+    }
+    val emotion = "emotion recorded ${sampling.emotion.recordedCount} · missing ${sampling.emotion.missingCount}"
+    val triggers = if (sampling.triggers.isEmpty()) {
+        "triggers none"
+    } else {
+        "triggers " + sampling.triggers.joinToString(", ") { "${it.trigger.ifEmpty { "blank" }} ${it.count}" }
+    }
+    val keys = sampling.occurrenceKeys.joinToString(", ") { it.raw }.ifEmpty { "none" }
+    val focalAxes = context.axes.joinToString(" · ") { axis ->
+        val value = axis.raw?.toString() ?: axis.status.name.lowercase()
+        "${axisLabel(axis.axisId)} $value"
+    }
+    val focalEmotion = context.emotion.ifEmpty { "absent" }
+    return "$requested · $history · $span · $gaps · $axes · $emotion · $triggers · states $keys · " +
+        "focal axes $focalAxes · focal emotion $focalEmotion"
+}
+
+private fun samplingLabel(sampling: ObservationSamplingId): String = when (sampling) {
+    ObservationSamplingId.RESOLVED_WAKING_PATH -> "Resolved waking path"
+    ObservationSamplingId.PRIOR_24_HOURS -> "Prior 24 hours"
+    ObservationSamplingId.PRIOR_7_DAYS -> "Prior 7 days"
+}
+
+private fun hours(millis: Long): String = formatBaselineValue(millis / 3_600_000.0)
 
 private fun forecastPhrase(forecast: ObservableForecast): String {
     val bounded = formatBaselineValue(forecast.boundedForecast)
