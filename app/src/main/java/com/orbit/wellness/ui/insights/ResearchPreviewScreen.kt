@@ -27,12 +27,14 @@ import com.orbit.wellness.ui.util.InlineLoading
 enum class ResearchPane {
     STATE_MAP,
     ASSOCIATIONS,
+    PREDICTION,
 }
 
 @Composable
 fun ResearchPreviewScreen(
     stateMapViewModel: ResearchPreviewViewModel,
     associationViewModel: BehaviorAssociationViewModel,
+    walkForwardViewModel: WalkForwardViewModel,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -63,10 +65,16 @@ fun ResearchPreviewScreen(
                 onClick = { pane = ResearchPane.ASSOCIATIONS },
                 label = { Text(BehaviorAssociationCopy.ASSOCIATIONS_PANE) },
             )
+            FilterChip(
+                selected = pane == ResearchPane.PREDICTION,
+                onClick = { pane = ResearchPane.PREDICTION },
+                label = { Text(PredictionLabCopy.PANE) },
+            )
         }
         when (pane) {
             ResearchPane.STATE_MAP -> StateMapResearchPane(stateMapViewModel)
             ResearchPane.ASSOCIATIONS -> AssociationResearchPane(associationViewModel)
+            ResearchPane.PREDICTION -> PredictionResearchPane(walkForwardViewModel)
         }
     }
 }

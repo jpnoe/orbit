@@ -73,6 +73,7 @@ import com.orbit.wellness.ui.insights.InsightsScreen
 import com.orbit.wellness.ui.insights.InsightsViewModel
 import com.orbit.wellness.ui.insights.ResearchPreviewScreen
 import com.orbit.wellness.ui.insights.ResearchPreviewViewModel
+import com.orbit.wellness.ui.insights.WalkForwardViewModel
 import com.orbit.wellness.ui.profile.HealthConnectViewModel
 import com.orbit.wellness.ui.profile.ProfileScreen
 import com.orbit.wellness.ui.profile.TrustedContactsSection
@@ -446,9 +447,15 @@ fun OrbitApp(
                             zone = ZoneId.systemDefault(),
                         ),
                     )
+                    val walkForwardViewModel: WalkForwardViewModel = viewModel(
+                        factory = WalkForwardViewModel.Factory(
+                            repository = application.checkInAnalysisRepository,
+                        ),
+                    )
                     ResearchPreviewScreen(
                         stateMapViewModel = researchViewModel,
                         associationViewModel = associationViewModel,
+                        walkForwardViewModel = walkForwardViewModel,
                         onBack = { navController.popBackStack() },
                     )
                 }
