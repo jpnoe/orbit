@@ -213,7 +213,13 @@ data class TrajectoryHorizonPreview(
 )
 
 fun projectCausalStateSide(dataset: CheckInAnalysisDatasetV2): CausalStateSideDataset {
-    val trajectory = projectStateTrajectoryContext(dataset)
+    return projectCausalStateSide(dataset, projectStateTrajectoryContext(dataset))
+}
+
+internal fun projectCausalStateSide(
+    dataset: CheckInAnalysisDatasetV2,
+    trajectory: StateTrajectoryContextDataset,
+): CausalStateSideDataset {
     val states = dataset.states.associateBy { it.checkInId }
     val orderedStates = dataset.states.sortedWith(compareBy({ it.recordedAt }, { it.checkInId }))
     return CausalStateSideDataset(

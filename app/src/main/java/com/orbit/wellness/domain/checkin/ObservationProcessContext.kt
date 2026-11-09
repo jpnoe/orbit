@@ -223,7 +223,14 @@ data class ObservationProcessDataset(
 
 fun projectObservationProcess(dataset: CheckInAnalysisDatasetV2): ObservationProcessDataset {
     if (dataset.states.isEmpty()) return ObservationProcessDataset()
-    val trajectory = projectStateTrajectoryContext(dataset)
+    return projectObservationProcess(dataset, projectStateTrajectoryContext(dataset))
+}
+
+internal fun projectObservationProcess(
+    dataset: CheckInAnalysisDatasetV2,
+    trajectory: StateTrajectoryContextDataset,
+): ObservationProcessDataset {
+    if (dataset.states.isEmpty()) return ObservationProcessDataset()
     val states = dataset.states.associateBy { it.checkInId }
     val ordered = dataset.states.sortedWith(compareBy({ it.recordedAt }, { it.checkInId }))
     val historyFrom = ordered.first().recordedAt

@@ -2,10 +2,8 @@ package com.orbit.wellness.ui.insights
 
 import com.orbit.wellness.data.CheckInAnalysisSnapshot
 import com.orbit.wellness.domain.checkin.CheckInAnalysisDatasetV2
-import com.orbit.wellness.domain.checkin.ObservationProcessDataset
-import com.orbit.wellness.domain.checkin.WalkForwardProjection
-import com.orbit.wellness.domain.checkin.projectObservationProcess
-import com.orbit.wellness.domain.checkin.projectWalkForward
+import com.orbit.wellness.domain.checkin.ForecastExampleBundle
+import com.orbit.wellness.domain.checkin.projectForecastExamples
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -15,9 +13,11 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.mapLatest
 
 data class PredictionLabSnapshot(
-    val walkForward: WalkForwardProjection,
-    val observationProcess: ObservationProcessDataset,
-)
+    val examples: ForecastExampleBundle,
+) {
+    val walkForward get() = examples.walkForward
+    val observationProcess get() = examples.observationProcess
+}
 
 /**
  * Projects one check-in snapshot into recorded walk-forward attempts and the
@@ -31,17 +31,14 @@ data class PredictionLabSnapshot(
 fun observeWalkForward(
     snapshots: Flow<CheckInAnalysisSnapshot>,
     computation: CoroutineDispatcher = Dispatchers.Default,
-    project: suspend (CheckInAnalysisDatasetV2) -> WalkForwardProjection = { dataset ->
-        projectWalkForward(dataset)
+    project: suspend (CheckInAnalysisDatasetV2) -> ForecastExampleBundle = { dataset ->
+        projectForecastExamples(dataset)
     },
 ): Flow<PredictionLabSnapshot> {
     return snapshots
         .distinctUntilChanged()
         .mapLatest { snapshot ->
-            PredictionLabSnapshot(
-                walkForward = project(snapshot.dataset),
-                observationProcess = projectObservationProcess(snapshot.dataset),
-            )
+            PredictionLabSnapshot(examples = project(snapshot.dataset))
         }
         .flowOn(computation)
 }

@@ -195,7 +195,10 @@ class ObservationProcessTest {
         assertTrue(compact.contains("coverage"))
         assertFalse(compact.contains("before-wake"))
         assertTrue(technical.contains("before-wake"))
-        assertTrue(focalObservationLabel(focal).contains("emotion recorded"))
+        assertEquals(
+            "Focal core axes recorded 1/4 · conflicts 1 · trigger night · emotion recorded",
+            focalObservationLabel(focal),
+        )
         assertFalse(focalObservationLabel(focal).contains("glad"))
         assertTrue(technical.contains("glad"))
 

@@ -486,7 +486,14 @@ data class SandboxSession(
 
 fun projectWalkForward(dataset: CheckInAnalysisDatasetV2): WalkForwardProjection {
     val graph = projectAlternatingTemporalGraph(dataset)
-    val side = projectCausalStateSide(dataset)
+    val side = projectCausalStateSide(dataset, projectStateTrajectoryContext(graph))
+    return walkForwardFrom(graph, side)
+}
+
+internal fun walkForwardFrom(
+    graph: AlternatingTemporalGraph,
+    side: CausalStateSideDataset,
+): WalkForwardProjection {
     val byKey = side.states.associateBy { it.trajectory.stateKey }
     val attempts = graph.causalSteps.filter { it.eligibility.eligible }.map { step ->
         val starting = checkNotNull(step.input.startingState) {
@@ -715,7 +722,7 @@ private fun WalkForwardAttempt.prediction(baseline: BaselineKind, axisId: String
     return predictions.single { it.baseline == baseline && it.axisId == axisId }
 }
 
-private fun observedAxisTarget(state: StateObservationV2): ObservedAxisTarget {
+internal fun observedAxisTarget(state: StateObservationV2): ObservedAxisTarget {
     return ObservedAxisTarget(
         state.core.inOrder().map { (axisId, reading) -> ObservedAxisReading(axisId, reading?.raw) },
     )

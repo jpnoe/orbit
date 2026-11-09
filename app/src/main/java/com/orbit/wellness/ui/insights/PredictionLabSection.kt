@@ -23,9 +23,12 @@ import com.orbit.wellness.domain.checkin.BackgroundDeviation
 import com.orbit.wellness.domain.checkin.BaselineKind
 import com.orbit.wellness.domain.checkin.CausalStateSide
 import com.orbit.wellness.domain.checkin.CausalStateSideDataset
+import com.orbit.wellness.domain.checkin.CausalIneligibilityReason
 import com.orbit.wellness.domain.checkin.EvidenceOrigin
 import com.orbit.wellness.domain.checkin.FocalAxisStatus
 import com.orbit.wellness.domain.checkin.ForecastEvidence
+import com.orbit.wellness.domain.checkin.ForecastExampleBundle
+import com.orbit.wellness.domain.checkin.ForecastExampleSummary
 import com.orbit.wellness.domain.checkin.ObservationProcessContext
 import com.orbit.wellness.domain.checkin.ObservationProcessDataset
 import com.orbit.wellness.domain.checkin.ObservationSampling
@@ -55,7 +58,7 @@ internal object PredictionLabCopy {
         "These baselines score the four recorded axes. They are not a complete state, and they do not update a model."
     const val REPLAY_NOTICE = "Included in the aggregate. This does not change the logged history."
     const val SANDBOX_NOTICE =
-        "In memory only. Overrides stay separate from the logged evidence. This is not included in the aggregate and is not written to the log."
+        "In memory only. Overrides stay separate from the logged evidence. This is not included in the aggregate and is not written to the log. A supplied horizon stays in this pane and is not added to the recorded examples."
     const val NO_ATTEMPTS = "No eligible transition was recorded."
     const val NO_ANCHORS = "No state occurrence is available."
     const val METRICS = "Aggregate"
@@ -83,8 +86,7 @@ fun PredictionResearchPane(walkForwardViewModel: WalkForwardViewModel) {
     when (val state = uiState) {
         WalkForwardUiState.Loading -> InlineLoading()
         is WalkForwardUiState.Ready -> PredictionLab(
-            projection = state.projection,
-            observationProcess = state.observationProcess,
+            bundle = state.examples,
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -92,13 +94,15 @@ fun PredictionResearchPane(walkForwardViewModel: WalkForwardViewModel) {
 
 @Composable
 private fun PredictionLab(
-    projection: com.orbit.wellness.domain.checkin.WalkForwardProjection,
-    observationProcess: ObservationProcessDataset,
+    bundle: ForecastExampleBundle,
     modifier: Modifier = Modifier,
 ) {
+    val projection = bundle.walkForward
+    val observationProcess = bundle.observationProcess
     var mode by remember { mutableStateOf(PredictionLabMode.REPLAY) }
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(PredictionLabCopy.NOTICE, style = MaterialTheme.typography.bodyMedium)
+        Text(forecastExampleSummaryLabel(bundle.summary))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(
                 selected = mode == PredictionLabMode.REPLAY,
@@ -493,7 +497,16 @@ internal fun expertCompactLabel(expert: TrajectoryExpert, deviation: BackgroundD
     }
     val slope = expert.slopePerHour
     if (slope == null) {
-        return "$name · $continuity · ${gapLabel(expert.unavailable)}"
+        val readings = if (expert.observedCount == 1) "1 reading" else "${expert.observedCount} readings"
+        val span = if (expert.unavailable == TrajectoryExpertGap.ZERO_TIME_SPAN) " · zero time span" else ""
+        val reason = when (expert.unavailable) {
+            TrajectoryExpertGap.ZERO_TIME_SPAN,
+            TrajectoryExpertGap.INSUFFICIENT_OBSERVATIONS,
+            null,
+            -> ""
+            else -> " · ${gapLabel(expert.unavailable)}"
+        }
+        return "$name · $continuity · $readings · slope unavailable$span$reason"
     }
     val span = expert.elapsedMillis?.let { formatBaselineValue(it / 3_600_000.0) } ?: "0"
     val noise = expert.fitResidualDeviation?.let { formatBaselineValue(it) } ?: "none"
@@ -545,14 +558,34 @@ private fun ObservationProcessGroup(context: ObservationProcessContext) {
     }
 }
 
+internal fun forecastExampleSummaryLabel(summary: ForecastExampleSummary): String {
+    val reasons = if (summary.reasons.isEmpty()) {
+        "unavailable reasons none"
+    } else {
+        summary.reasons.joinToString(" · ") { "${reasonLabel(it.reason)} ${it.count}" }
+    }
+    return "State forecasts ${summary.stateExampleCount} · available ${summary.availableStateExamples} · " +
+        "unavailable ${summary.unavailableStateExamples} · $reasons · " +
+        "target axes missing ${summary.missingTargetAxes} · conflicts ${summary.conflictingTargetAxes} · " +
+        "recorded zeros ${summary.recordedZeroTargetAxes} · " +
+        "conditional ${summary.conditionalExampleCount} · recorded realized ${summary.recordedRealizedCount} · " +
+        "sandbox specified ${summary.sandboxSpecifiedCount}"
+}
+
+private fun reasonLabel(reason: CausalIneligibilityReason): String = when (reason) {
+    CausalIneligibilityReason.BOUNDARY_INTERVAL -> "boundary"
+    CausalIneligibilityReason.START_UNRESOLVED -> "unresolved start"
+    CausalIneligibilityReason.INVALID_CHRONOLOGY -> "invalid chronology"
+    CausalIneligibilityReason.INCOMPLETE_CONTEXT -> "incomplete context"
+    CausalIneligibilityReason.INCONSISTENT_CONTEXT -> "inconsistent context"
+}
+
 internal fun focalObservationLabel(context: ObservationProcessContext): String {
     val recorded = context.axes.count { it.status == FocalAxisStatus.RECORDED }
-    val missing = context.axes.count { it.status == FocalAxisStatus.MISSING }
     val conflicting = context.axes.count { it.status == FocalAxisStatus.CONFLICTING }
     val trigger = context.trigger.ifEmpty { "blank" }
     val emotion = if (context.emotionPresent) "emotion recorded" else "emotion absent"
-    return "Focal · trigger $trigger · recorded axes $recorded · missing axes $missing · " +
-        "conflicting axes $conflicting · $emotion"
+    return "Focal core axes recorded $recorded/4 · conflicts $conflicting · trigger $trigger · $emotion"
 }
 
 internal fun observationCompactLabel(sampling: ObservationSampling): String {

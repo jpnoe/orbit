@@ -37,7 +37,12 @@ private val TRAJECTORY_AXES = listOf(
 fun projectStateTrajectoryContext(dataset: CheckInAnalysisDatasetV2): StateTrajectoryContextDataset {
     val ids = dataset.states.map { it.checkInId }
     require(ids.size == ids.toSet().size) { "State occurrences must stay distinct" }
-    val graph = projectAlternatingTemporalGraph(dataset)
+    return projectStateTrajectoryContext(projectAlternatingTemporalGraph(dataset))
+}
+
+internal fun projectStateTrajectoryContext(graph: AlternatingTemporalGraph): StateTrajectoryContextDataset {
+    val ids = graph.states.map { it.id }
+    require(ids.size == ids.toSet().size) { "State occurrences must stay distinct" }
     val steps = graph.causalSteps.associateBy { it.input.transitionId }
     val states = graph.states.sortedWith(compareBy({ it.state.recordedAt }, { it.id }))
     return StateTrajectoryContextDataset(
