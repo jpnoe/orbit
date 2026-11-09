@@ -182,7 +182,7 @@ class CausalFeatureEncoderTest {
         assertEquals(1.0, value(recordedVector, schema, CausalFeatureIdentity.BehaviorPresent(walk)), 0.0)
         assertEquals(1.0, value(sandboxVector, schema, CausalFeatureIdentity.BehaviorPresent(walk)), 0.0)
         val heldVector = encodeCausalConditional(checkNotNull(heldScenario.input), heldScenario.scenario, schema, zone)
-        assertEquals(1.0, value(heldVector, schema, CausalFeatureIdentity.BehaviorOov), 0.0)
+        assertEquals(1.0, value(heldVector, schema, CausalFeatureIdentity.BehaviorOov(BehaviorKind.ACTIVITY)), 0.0)
         assertFalse(schema.features.any { it.identity == CausalFeatureIdentity.BehaviorPresent(run) })
         assertEquals(CausalFeatureStatus.OBSERVED, channel(projectCausalRawFeatures(checkNotNull(trainingScenario.input), zone, trainingScenario.scenario), "scenario.category.activity").status)
         assertEquals(1.0, channel(projectCausalRawFeatures(checkNotNull(trainingScenario.input), zone, trainingScenario.scenario), "scenario.category.activity").value)
@@ -206,7 +206,18 @@ class CausalFeatureEncoderTest {
                 name.contains("coordinate") || name.contains("note") || name.contains("recordedAt")
         })
         assertEquals(CausalDeferredHead.entries, schema.deferred)
-        assertTrue(schema.features.none { it.name.contains("wearable") })
+        assertEquals(schema.deferred, stateSchema.deferred)
+        assertEquals(
+            listOf(
+                CausalDeferredHead.WEARABLE_PHYSIOLOGY,
+                CausalDeferredHead.EMOTION_TARGET,
+                CausalDeferredHead.LATENT_TARGET,
+                CausalDeferredHead.SLEEP_PHYSIOLOGY,
+            ),
+            schema.deferred,
+        )
+        assertTrue(schema.features.none { it.name.contains("sleep") || it.name.contains("wearable") || it.name.contains("latent") || it.name.contains("target") })
+        assertTrue(stateSchema.features.none { it.name.contains("sleep") || it.name.contains("wearable") || it.name.contains("latent") || it.name.contains("target") })
     }
 
     @Test
@@ -250,6 +261,133 @@ class CausalFeatureEncoderTest {
     }
 
     @Test
+    fun reversedTrainingOrderPreservesNontrivialCentersAndEncodings() {
+        val times = listOf(0L, 1L, 4L, 17L)
+        val ids = listOf("a", "b", "c", "d")
+        val states = ids.mapIndexed { index, id ->
+            point(id, times[index], mood = index, energy = index + 2)
+        }
+        val bundle = projectForecastExamples(
+            dataset(
+                states,
+                states.zipWithNext().map { (previous, next) ->
+                    interval(next.checkInId, previous.checkInId, previous.recordedAt, next.recordedAt)
+                },
+            ),
+        )
+        val rows = listOf("d", "c", "b").map { id -> CausalStateTrainingRow(id, inputFor(bundle, id)) }
+        val forward = fitCausalStateSchema(rows, zone)
+        val backward = fitCausalStateSchema(rows.reversed(), zone)
+        assertEquals(forward, backward)
+        val encoded = encodeCausalState(inputFor(bundle, "d"), forward, zone)
+        assertEquals(encoded, encodeCausalState(inputFor(bundle, "d"), backward, zone))
+        val slope = forward.definition(CausalFeatureIdentity.Structural("path.immediate.mood.slope"))
+        val presented = rows.map { row ->
+            checkNotNull(channel(projectCausalRawFeatures(row.input, zone), "path.immediate.mood.slope").value)
+        }
+        assertTrue(presented.sum() != presented.asReversed().sum())
+        val sorted = rows.sortedBy { it.inputId }.map { row ->
+            checkNotNull(channel(projectCausalRawFeatures(row.input, zone), "path.immediate.mood.slope").value)
+        }
+        assertEquals(sorted.sum() / sorted.size, forward.support[slope.index].center, 0.0)
+        assertTrue(forward.support[slope.index].center % 1.0 != 0.0)
+    }
+
+    @Test
+    fun categoryKnowledgeStaysOnEachBehaviorKindOov() {
+        val example = projectForecastExamples(withKnowledge(chain(moods = listOf(3, 4))))
+            .conditionalTransitions.examples.single { it.identity.endingKey.raw == "b" }
+        val input = checkNotNull(example.input)
+        val scenario = example.scenario
+        val schema = fitCausalConditionalSchema(
+            listOf(CausalConditionalTrainingRow("b", input, scenario)),
+            zone,
+        )
+        val activity = scenario.exposures.single { it.identity.kind == BehaviorKind.ACTIVITY } as ReportedBehavior
+        val food = scenario.exposures.single { it.identity.kind == BehaviorKind.FOOD } as ReportedBehavior
+        val usage = scenario.exposures.single { it.identity.kind == BehaviorKind.USAGE } as UsageBehavior
+        val activityOov = CausalFeatureIdentity.BehaviorOov(BehaviorKind.ACTIVITY)
+        val foodOov = CausalFeatureIdentity.BehaviorOov(BehaviorKind.FOOD)
+        val mealOov = CausalFeatureIdentity.BehaviorOov(BehaviorKind.MEAL_SIZE)
+        val amountOov = CausalFeatureIdentity.UsageAmountOov
+        assertFalse(schema.features.any { it.identity == CausalFeatureIdentity.BehaviorOov(BehaviorKind.WORKOUT) })
+        assertTrue(schema.definition(foodOov).index < schema.definition(mealOov).index)
+        fun encoded(next: TransitionScenario) = encodeCausalConditional(input, next, schema, zone)
+        val known = encoded(scenario)
+        assertObserved(known, schema, activityOov, 0.0)
+        assertObserved(known, schema, foodOov, 0.0)
+        assertObserved(known, schema, mealOov, 0.0)
+        assertObserved(known, schema, amountOov, 0.0)
+        assertObserved(known, schema, CausalFeatureIdentity.BehaviorPresent(activity.identity), 1.0)
+        val unknownActivity = encoded(scenario.copy(activity = CategoryKnowledge.UNKNOWN))
+        assertStatus(unknownActivity, schema, activityOov, CausalFeatureStatus.UNKNOWN)
+        assertEquals(0.0, value(unknownActivity, schema, activityOov), 0.0)
+        assertObserved(unknownActivity, schema, foodOov, 0.0)
+        val absent = encoded(
+            scenario.copy(
+                activity = CategoryKnowledge.REVIEWED_NONE,
+                exposures = scenario.exposures.filter { it.identity.kind != BehaviorKind.ACTIVITY },
+            ),
+        )
+        assertObserved(absent, schema, activityOov, 0.0)
+        val unseenActivity = activity.copy(
+            identity = behaviorIdentity(BehaviorKind.ACTIVITY, null, "Run"),
+            displayName = "Run",
+        )
+        val onlyActivity = encoded(
+            scenario.copy(exposures = scenario.exposures.filter { it.identity.kind != BehaviorKind.ACTIVITY } + unseenActivity),
+        )
+        assertObserved(onlyActivity, schema, activityOov, 1.0)
+        assertObserved(onlyActivity, schema, foodOov, 0.0)
+        assertObserved(onlyActivity, schema, mealOov, 0.0)
+        assertObserved(onlyActivity, schema, amountOov, 0.0)
+        assertFalse(schema.features.any { it.identity == CausalFeatureIdentity.BehaviorPresent(unseenActivity.identity) })
+        val unseenFood = food.copy(
+            identity = behaviorIdentity(BehaviorKind.FOOD, null, "Pear"),
+            displayName = "Pear",
+        )
+        val onlyFood = encoded(
+            scenario.copy(exposures = scenario.exposures.filter { it.identity.kind != BehaviorKind.FOOD } + unseenFood),
+        )
+        assertObserved(onlyFood, schema, foodOov, 1.0)
+        assertObserved(onlyFood, schema, mealOov, 0.0)
+        assertObserved(onlyFood, schema, activityOov, 0.0)
+        val unknownDiet = encoded(scenario.copy(diet = CategoryKnowledge.UNKNOWN))
+        assertStatus(unknownDiet, schema, foodOov, CausalFeatureStatus.UNKNOWN)
+        assertStatus(unknownDiet, schema, mealOov, CausalFeatureStatus.UNKNOWN)
+        assertObserved(unknownDiet, schema, activityOov, 0.0)
+        val unknownUsage = encoded(scenario.copy(usage = CategoryKnowledge.UNKNOWN))
+        assertStatus(unknownUsage, schema, amountOov, CausalFeatureStatus.UNKNOWN)
+        assertEquals(0.0, value(unknownUsage, schema, amountOov), 0.0)
+        val absentUsage = encoded(
+            scenario.copy(
+                usage = CategoryKnowledge.REVIEWED_NONE,
+                exposures = scenario.exposures.filter { it.identity.kind != BehaviorKind.USAGE },
+            ),
+        )
+        assertObserved(absentUsage, schema, amountOov, 0.0)
+        val otherUnit = usage.copy(
+            amounts = listOf(UsageQuantityEvidence("2 ml", UsageQuantityStatus.PARSED, 2.0, "ml", null)),
+        )
+        val unseenUnit = encoded(
+            scenario.copy(exposures = scenario.exposures.filter { it.identity.kind != BehaviorKind.USAGE } + otherUnit),
+        )
+        assertObserved(unseenUnit, schema, amountOov, 1.0)
+        assertEquals(
+            CausalFeatureStatus.MISSING,
+            unseenUnit.statuses[schema.definition(CausalFeatureIdentity.UsageAmount(usage.identity, "mg")).index],
+        )
+        assertObserved(unseenUnit, schema, activityOov, 0.0)
+        val unknownWithUnseenUnit = encoded(
+            scenario.copy(
+                usage = CategoryKnowledge.UNKNOWN,
+                exposures = scenario.exposures.filter { it.identity.kind != BehaviorKind.USAGE } + otherUnit,
+            ),
+        )
+        assertStatus(unknownWithUnseenUnit, schema, amountOov, CausalFeatureStatus.UNKNOWN)
+    }
+
+    @Test
     fun theEncoderDoesNotFitTheFullHistoryOrReleaseAModel() {
         val source = source(
             "src/main/java/com/orbit/wellness/domain/checkin/CausalFeatureEncoder.kt",
@@ -269,6 +407,7 @@ class CausalFeatureEncoderTest {
         ).forEach { token -> assertFalse(token, source.contains(token)) }
         assertTrue(source.contains("READ_TIME_ZONE"))
         assertTrue(source.contains("WEARABLE_PHYSIOLOGY"))
+        assertTrue(source.contains("SLEEP_PHYSIOLOGY"))
         val insights = source(
             "src/main/java/com/orbit/wellness/ui/insights/InsightsScreen.kt",
             "app/src/main/java/com/orbit/wellness/ui/insights/InsightsScreen.kt",
@@ -280,7 +419,26 @@ class CausalFeatureEncoderTest {
         assertFalse(insights.contains("causal-feature-encoder"))
         assertFalse(nav.contains("causal-feature-encoder"))
         assertFalse(source.contains("predictive = true"))
-        assertEquals(CAUSAL_FEATURE_ENCODER_PROTOCOL, "causal-feature-encoder-v1")
+        assertEquals(CAUSAL_FEATURE_ENCODER_PROTOCOL, "causal-feature-encoder-v2")
+    }
+
+    private fun assertObserved(
+        vector: CausalEncodedVector,
+        schema: CausalFeatureSchema,
+        identity: CausalFeatureIdentity,
+        expected: Double,
+    ) {
+        assertStatus(vector, schema, identity, CausalFeatureStatus.OBSERVED)
+        assertEquals(expected, value(vector, schema, identity), 0.0)
+    }
+
+    private fun assertStatus(
+        vector: CausalEncodedVector,
+        schema: CausalFeatureSchema,
+        identity: CausalFeatureIdentity,
+        status: CausalFeatureStatus,
+    ) {
+        assertEquals(status, vector.statuses[schema.definition(identity).index])
     }
 
     private fun value(vector: CausalEncodedVector, schema: CausalFeatureSchema, identity: CausalFeatureIdentity): Double {
@@ -323,6 +481,40 @@ class CausalFeatureEncoderTest {
                         CategoryObservationKindV2.ENTRIES,
                         item.windowEndAt,
                         listOf(ActivityObservationV2(name.lowercase(), null, name, item.windowStartAt)),
+                    ),
+                )
+            }
+        })
+    }
+
+    private fun withKnowledge(data: CheckInAnalysisDatasetV2): CheckInAnalysisDatasetV2 {
+        return data.copy(intervals = data.intervals.map { item ->
+            if (item.endingCheckInId != "b") {
+                item
+            } else {
+                item.copy(
+                    activity = ActivityCategoryObservationV2(
+                        CategoryObservationKindV2.ENTRIES,
+                        item.windowEndAt,
+                        listOf(ActivityObservationV2("walk", null, "Walk", item.windowStartAt)),
+                    ),
+                    diet = DietCategoryObservationV2(
+                        CategoryObservationKindV2.ENTRIES,
+                        item.windowEndAt,
+                        listOf(
+                            MealObservationV2(
+                                "meal",
+                                "large",
+                                0,
+                                item.windowStartAt,
+                                listOf(FoodObservationV2("apple", null, "Apple", 0)),
+                            ),
+                        ),
+                    ),
+                    usage = UsageCategoryObservationV2(
+                        CategoryObservationKindV2.ENTRIES,
+                        item.windowEndAt,
+                        listOf(UsageObservationV2("zero", null, "tea", "supportive", "0 mg", item.windowStartAt)),
                     ),
                 )
             }

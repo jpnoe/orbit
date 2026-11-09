@@ -7,7 +7,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * Named features for a later forecast gate. Protocol `causal-feature-encoder-v1`.
+ * Named features for a later forecast gate. Protocol `causal-feature-encoder-v2`.
  *
  * Stage one projects raw channels from a [StateForecastInput] and, optionally,
  * one sanitized [TransitionScenario]. Stage two fits a schema on an explicit
@@ -16,8 +16,9 @@ import kotlin.math.sin
  *
  * The state input is the only state-side source. Targets, residuals, outgoing
  * intervals, ending emotion, and retrospective coordinates are not read.
- * [encodeCausalAxisTargets] is a separate head. Emotion targets, latent targets,
- * and wearable physiology are named in [CausalDeferredHead] and are not encoded.
+ * [encodeCausalAxisTargets] is a separate head. Sleep physiology, wearable
+ * physiology, emotion targets, and latent targets are named in
+ * [CausalDeferredHead] and are not encoded.
  * Historical recording zones are not stored, so clock channels are a read-time
  * reconstruction in the caller-supplied [ZoneId]. Time since wake is not invented.
  *
@@ -28,6 +29,11 @@ import kotlin.math.sin
  * variation are separate flags. Path and background experts stay in separate
  * families. Scenario provenance is audit metadata on the raw projection and is
  * not a column. Recorded and sandbox scenarios share the scenario columns.
+ * Fitting sorts the supplied rows by input id before projection, vocabulary,
+ * support, and schema construction. Each behavior kind in that vocabulary has
+ * its own out-of-vocabulary column, and that column follows the kind's
+ * category knowledge. Food and meal size both use diet knowledge and stay
+ * separate columns. Usage-amount out-of-vocabulary follows usage knowledge.
  *
  * Omitted on purpose: trajectory `currentRaw` (focal coverage already keeps
  * conflict), expert minima and maxima, path-break tokens, occurrence keys,
@@ -36,7 +42,7 @@ import kotlin.math.sin
  * historical emotion tokens (the observation context stores counts only),
  * and any quantity that would add incompatible units together.
  */
-const val CAUSAL_FEATURE_ENCODER_PROTOCOL = "causal-feature-encoder-v1"
+const val CAUSAL_FEATURE_ENCODER_PROTOCOL = "causal-feature-encoder-v2"
 
 enum class CausalSchemaMode {
     STATE,
@@ -81,6 +87,7 @@ enum class CausalDeferredHead {
     WEARABLE_PHYSIOLOGY,
     EMOTION_TARGET,
     LATENT_TARGET,
+    SLEEP_PHYSIOLOGY,
 }
 
 enum class CausalTargetStatus {
@@ -99,7 +106,8 @@ sealed interface CausalFeatureIdentity {
         val token: String?,
     ) : CausalFeatureIdentity
     data class BehaviorPresent(val identity: BehaviorIdentity) : CausalFeatureIdentity
-    data object BehaviorOov : CausalFeatureIdentity
+    /** One column for each behavior kind present in the fitted vocabulary. */
+    data class BehaviorOov(val kind: BehaviorKind) : CausalFeatureIdentity
     data class WorkoutMinutes(val identity: BehaviorIdentity) : CausalFeatureIdentity
     data class UsageMissing(val identity: BehaviorIdentity) : CausalFeatureIdentity
     data class UsageUnparsed(val identity: BehaviorIdentity) : CausalFeatureIdentity
@@ -319,7 +327,7 @@ fun fitCausalStateSchema(
     cutoffLabel: String = "explicit-training-rows",
 ): CausalFeatureSchema {
     require(training.isNotEmpty()) { "State schema fitting needs an explicit training list" }
-    val rows = training.map { row ->
+    val rows = training.sortedBy { it.inputId }.map { row ->
         row.inputId to projectCausalRawFeatures(row.input, zone)
     }
     return fitSchema(CausalSchemaMode.STATE, rows, zone, cutoffLabel)
@@ -331,7 +339,7 @@ fun fitCausalConditionalSchema(
     cutoffLabel: String = "explicit-training-rows",
 ): CausalFeatureSchema {
     require(training.isNotEmpty()) { "Conditional schema fitting needs an explicit training list" }
-    val rows = training.map { row ->
+    val rows = training.sortedBy { it.inputId }.map { row ->
         row.inputId to projectCausalRawFeatures(row.input, zone, row.scenario)
     }
     return fitSchema(CausalSchemaMode.CONDITIONAL, rows, zone, cutoffLabel)
@@ -386,6 +394,7 @@ private fun fitSchema(
     }
     require(rows.all { it.second.zoneId == zone.id })
     val ids = rows.map { it.first }
+    require(ids == ids.sorted()) { "Training rows are sorted by input id before fitting" }
     require(ids.size == ids.toSet().size) { "Training input ids stay distinct" }
     val projections = rows.map { it.second }
     val triggers = triggerVocabulary(projections)
@@ -508,15 +517,17 @@ private fun fitSchema(
                 CausalFeatureScaling.BINARY,
             )
         }
-        add(
-            "scenario.behavior.oov",
-            CausalFeatureFamily.SCENARIO_EXPOSURE,
-            CausalFeatureIdentity.BehaviorOov,
-            "indicator",
-            "out-of-vocabulary",
-            CausalInformationBoundary.SCENARIO,
-            CausalFeatureScaling.BINARY,
-        )
+        behaviors.map { it.kind }.distinct().forEach { kind ->
+            add(
+                "scenario.behavior.oov.${kind.name.lowercase()}",
+                CausalFeatureFamily.SCENARIO_EXPOSURE,
+                CausalFeatureIdentity.BehaviorOov(kind),
+                "indicator",
+                "out-of-vocabulary",
+                CausalInformationBoundary.SCENARIO,
+                CausalFeatureScaling.BINARY,
+            )
+        }
         behaviors.filter { it.kind == BehaviorKind.WORKOUT }.forEach { identity ->
             add(
                 "scenario.workout.minutes.${identityToken(identity)}",
@@ -589,7 +600,7 @@ private fun fitSchema(
         mode = mode,
         zoneId = zone.id,
         cutoffLabel = cutoffLabel,
-        trainingInputIds = ids.sorted(),
+        trainingInputIds = ids,
         features = features,
         support = support,
     )
@@ -670,23 +681,12 @@ private fun resolve(
         }
         is CausalFeatureIdentity.HistoricalTrigger -> historicalTrigger(projection, identity, triggers)
         is CausalFeatureIdentity.BehaviorPresent -> behaviorPresent(projection, identity.identity)
-        CausalFeatureIdentity.BehaviorOov -> {
-            val unseen = projection.exposures.any { it.identity !in behaviors }
-            flag(unseen) to CausalFeatureStatus.OBSERVED
-        }
+        is CausalFeatureIdentity.BehaviorOov -> behaviorOov(projection, identity.kind, behaviors)
         is CausalFeatureIdentity.WorkoutMinutes -> workoutMinutes(projection, identity.identity)
         is CausalFeatureIdentity.UsageMissing -> usageStatus(projection, identity.identity, UsageQuantityStatus.MISSING)
         is CausalFeatureIdentity.UsageUnparsed -> usageStatus(projection, identity.identity, UsageQuantityStatus.UNPARSED)
         is CausalFeatureIdentity.UsageAmount -> usageAmount(projection, identity.identity, identity.unit)
-        CausalFeatureIdentity.UsageAmountOov -> {
-            val unseen = projection.exposures.filterIsInstance<UsageBehavior>().any { behavior ->
-                behavior.amounts.any { amount ->
-                    amount.status == UsageQuantityStatus.PARSED &&
-                        UsageQuantityKey(behavior.identity, amount.unit) !in quantities
-                }
-            }
-            flag(unseen) to CausalFeatureStatus.OBSERVED
-        }
+        CausalFeatureIdentity.UsageAmountOov -> usageAmountOov(projection, quantities)
     }
 }
 
@@ -709,6 +709,19 @@ private fun historicalTrigger(
         counts[identity.token] ?: 0
     }
     return value.toDouble() to CausalFeatureStatus.OBSERVED
+}
+
+private fun behaviorOov(
+    projection: CausalRawProjection,
+    kind: BehaviorKind,
+    behaviors: Set<BehaviorIdentity>,
+): Pair<Double?, CausalFeatureStatus> {
+    val categories = requireNotNull(projection.categories)
+    if (knowledgeFor(kind, categories) == CategoryKnowledge.UNKNOWN) {
+        return null to CausalFeatureStatus.UNKNOWN
+    }
+    val unseen = projection.exposures.any { it.identity.kind == kind && it.identity !in behaviors }
+    return flag(unseen) to CausalFeatureStatus.OBSERVED
 }
 
 private fun behaviorPresent(
@@ -759,6 +772,23 @@ private fun usageAmount(
     val parsed = rows.flatMap { it.amounts }.filter { it.status == UsageQuantityStatus.PARSED && it.unit == unit }
     if (parsed.isEmpty()) return null to CausalFeatureStatus.MISSING
     return parsed.sumOf { checkNotNull(it.numericAmount) } to CausalFeatureStatus.OBSERVED
+}
+
+private fun usageAmountOov(
+    projection: CausalRawProjection,
+    quantities: Set<UsageQuantityKey>,
+): Pair<Double?, CausalFeatureStatus> {
+    val categories = requireNotNull(projection.categories)
+    if (categories.usage == CategoryKnowledge.UNKNOWN) {
+        return null to CausalFeatureStatus.UNKNOWN
+    }
+    val unseen = projection.exposures.filterIsInstance<UsageBehavior>().any { behavior ->
+        behavior.amounts.any { amount ->
+            amount.status == UsageQuantityStatus.PARSED &&
+                UsageQuantityKey(behavior.identity, amount.unit) !in quantities
+        }
+    }
+    return flag(unseen) to CausalFeatureStatus.OBSERVED
 }
 
 private fun knowledgeFor(kind: BehaviorKind, categories: CausalCategoryView): CategoryKnowledge {
