@@ -46,8 +46,12 @@ import com.orbit.wellness.domain.checkin.TrajectoryHorizonPreview
 import com.orbit.wellness.domain.checkin.TrajectoryScaleId
 import com.orbit.wellness.domain.checkin.WalkForwardAttempt
 import com.orbit.wellness.domain.checkin.WalkForwardMetrics
+import com.orbit.wellness.domain.checkin.CausalFoldGap
+import com.orbit.wellness.domain.checkin.CausalWalkForwardFold
+import com.orbit.wellness.domain.checkin.projectCausalWalkForwardPreparation
 import com.orbit.wellness.domain.checkin.runSandbox
 import com.orbit.wellness.ui.util.InlineLoading
+import java.time.ZoneId
 import kotlin.math.round
 
 internal object PredictionLabCopy {
@@ -116,7 +120,7 @@ private fun PredictionLab(
             )
         }
         when (mode) {
-            PredictionLabMode.REPLAY -> RecordedReplayPane(projection, observationProcess)
+            PredictionLabMode.REPLAY -> RecordedReplayPane(bundle)
             PredictionLabMode.SANDBOX -> PredictionSandboxPane(
                 projection.anchors,
                 projection.stateSide,
@@ -127,10 +131,9 @@ private fun PredictionLab(
 }
 
 @Composable
-private fun RecordedReplayPane(
-    projection: com.orbit.wellness.domain.checkin.WalkForwardProjection,
-    observationProcess: ObservationProcessDataset,
-) {
+private fun RecordedReplayPane(bundle: ForecastExampleBundle) {
+    val projection = bundle.walkForward
+    val observationProcess = bundle.observationProcess
     val evaluation = projection.evaluation
     var showMetrics by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -150,6 +153,7 @@ private fun RecordedReplayPane(
                 }
             }
             Text("Transition ${attempt.transitionId}. Anchor ${attempt.anchorKey.raw}.")
+            CausalPreparationSection(bundle, attempt.transitionId)
             val anchorKey = attempt.anchorKey
             AttemptForecasts(
                 attempt = attempt,
@@ -556,6 +560,55 @@ private fun ObservationProcessGroup(context: ObservationProcessContext) {
             if (technical) Text(observationTechnicalLabel(context, sampling))
         }
     }
+}
+
+@Composable
+private fun CausalPreparationSection(
+    bundle: ForecastExampleBundle,
+    transitionId: String,
+) {
+    var open by remember(transitionId) { mutableStateOf(false) }
+    TextButton(onClick = { open = !open }) {
+        Text("Causal preparation")
+    }
+    if (!open) return
+    val zone = remember { ZoneId.systemDefault() }
+    val preparation = remember(bundle, zone.id) {
+        projectCausalWalkForwardPreparation(
+            bundle.stateForecasts.examples,
+            bundle.conditionalTransitions.examples,
+            zone,
+        )
+    }
+    Text(causalPreparationIntro())
+    val stateFold = preparation.stateFolds.singleOrNull { it.identity.transitionId == transitionId }
+    val conditionalFold = preparation.conditionalFolds.singleOrNull { it.identity.transitionId == transitionId }
+    if (stateFold == null || conditionalFold == null) {
+        Text("This transition has no prepared fold.")
+    } else {
+        Text(causalPreparationFoldLabel("State", stateFold))
+        Text(causalPreparationFoldLabel("Conditional", conditionalFold))
+    }
+}
+
+internal fun causalPreparationIntro(): String {
+    return "Cutoff is an ending strictly before the forecast origin. Event-time reconstruction. Not strict as known."
+}
+
+internal fun causalPreparationFoldLabel(title: String, fold: CausalWalkForwardFold): String {
+    val origin = fold.forecastOrigin?.toString() ?: "none"
+    val availability = when (fold.gap) {
+        null -> "prepared"
+        CausalFoldGap.NO_FORECAST_ORIGIN -> "unavailable no forecast origin"
+        CausalFoldGap.NO_PRIOR_INPUT -> "unavailable no prior input"
+    }
+    val base = fold.schema?.features?.size ?: 0
+    val columns = fold.prepared?.columns?.size ?: 0
+    val support = fold.axisSupport.joinToString(" · ") { "${it.axisId} ${it.observedTargetCount}" }
+    val oov = if (fold.oovActivations.isEmpty()) "none" else fold.oovActivations.joinToString(", ")
+    val provenance = fold.provenance?.let { " · ${it.name.lowercase().replace('_', ' ')} retrospective" }.orEmpty()
+    return "$title · $availability · origin $origin · priors ${fold.qualifyingPriorInputIds.size} · " +
+        "base features $base · prepared columns $columns · support $support · oov $oov$provenance"
 }
 
 internal fun forecastExampleSummaryLabel(summary: ForecastExampleSummary): String {

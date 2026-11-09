@@ -7,7 +7,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * Named features for a later forecast gate. Protocol `causal-feature-encoder-v2`.
+ * Named features for a later forecast gate. Protocol `causal-feature-encoder-v3`.
  *
  * Stage one projects raw channels from a [StateForecastInput] and, optionally,
  * one sanitized [TransitionScenario]. Stage two fits a schema on an explicit
@@ -30,10 +30,11 @@ import kotlin.math.sin
  * families. Scenario provenance is audit metadata on the raw projection and is
  * not a column. Recorded and sandbox scenarios share the scenario columns.
  * Fitting sorts the supplied rows by input id before projection, vocabulary,
- * support, and schema construction. Each behavior kind in that vocabulary has
- * its own out-of-vocabulary column, and that column follows the kind's
- * category knowledge. Food and meal size both use diet knowledge and stay
- * separate columns. Usage-amount out-of-vocabulary follows usage knowledge.
+ * support, and schema construction. A conditional schema has one
+ * out-of-vocabulary column for every [BehaviorKind], including a kind with no
+ * training identity. That column follows the kind's category knowledge. Food
+ * and meal size both use diet knowledge and stay separate columns.
+ * Usage-amount out-of-vocabulary follows usage knowledge.
  *
  * Omitted on purpose: trajectory `currentRaw` (focal coverage already keeps
  * conflict), expert minima and maxima, path-break tokens, occurrence keys,
@@ -42,7 +43,7 @@ import kotlin.math.sin
  * historical emotion tokens (the observation context stores counts only),
  * and any quantity that would add incompatible units together.
  */
-const val CAUSAL_FEATURE_ENCODER_PROTOCOL = "causal-feature-encoder-v2"
+const val CAUSAL_FEATURE_ENCODER_PROTOCOL = "causal-feature-encoder-v3"
 
 enum class CausalSchemaMode {
     STATE,
@@ -106,7 +107,7 @@ sealed interface CausalFeatureIdentity {
         val token: String?,
     ) : CausalFeatureIdentity
     data class BehaviorPresent(val identity: BehaviorIdentity) : CausalFeatureIdentity
-    /** One column for each behavior kind present in the fitted vocabulary. */
+    /** One permanent column for every [BehaviorKind], whether or not training saw that kind. */
     data class BehaviorOov(val kind: BehaviorKind) : CausalFeatureIdentity
     data class WorkoutMinutes(val identity: BehaviorIdentity) : CausalFeatureIdentity
     data class UsageMissing(val identity: BehaviorIdentity) : CausalFeatureIdentity
@@ -517,7 +518,7 @@ private fun fitSchema(
                 CausalFeatureScaling.BINARY,
             )
         }
-        behaviors.map { it.kind }.distinct().forEach { kind ->
+        BehaviorKind.entries.forEach { kind ->
             add(
                 "scenario.behavior.oov.${kind.name.lowercase()}",
                 CausalFeatureFamily.SCENARIO_EXPOSURE,

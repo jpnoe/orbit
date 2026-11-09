@@ -310,11 +310,15 @@ class CausalFeatureEncoderTest {
         val foodOov = CausalFeatureIdentity.BehaviorOov(BehaviorKind.FOOD)
         val mealOov = CausalFeatureIdentity.BehaviorOov(BehaviorKind.MEAL_SIZE)
         val amountOov = CausalFeatureIdentity.UsageAmountOov
-        assertFalse(schema.features.any { it.identity == CausalFeatureIdentity.BehaviorOov(BehaviorKind.WORKOUT) })
+        assertEquals(
+            BehaviorKind.entries,
+            schema.features.mapNotNull { (it.identity as? CausalFeatureIdentity.BehaviorOov)?.kind },
+        )
         assertTrue(schema.definition(foodOov).index < schema.definition(mealOov).index)
         fun encoded(next: TransitionScenario) = encodeCausalConditional(input, next, schema, zone)
         val known = encoded(scenario)
         assertObserved(known, schema, activityOov, 0.0)
+        assertObserved(known, schema, CausalFeatureIdentity.BehaviorOov(BehaviorKind.WORKOUT), 0.0)
         assertObserved(known, schema, foodOov, 0.0)
         assertObserved(known, schema, mealOov, 0.0)
         assertObserved(known, schema, amountOov, 0.0)
@@ -388,6 +392,44 @@ class CausalFeatureEncoderTest {
     }
 
     @Test
+    fun firstWorkoutActivatesOnlyThePermanentWorkoutOov() {
+        val walked = projectForecastExamples(withActivity(chain(moods = listOf(4, 5)), "b", "Walk"))
+        val training = walked.conditionalTransitions.examples.single { it.identity.endingKey.raw == "b" }
+        val schema = fitCausalConditionalSchema(
+            listOf(
+                CausalConditionalTrainingRow(
+                    "b",
+                    checkNotNull(training.input),
+                    training.scenario,
+                ),
+            ),
+            zone,
+        )
+        assertEquals(
+            BehaviorKind.entries,
+            schema.features.mapNotNull { (it.identity as? CausalFeatureIdentity.BehaviorOov)?.kind },
+        )
+        assertFalse(schema.features.any { (it.identity as? CausalFeatureIdentity.BehaviorPresent)?.identity?.kind == BehaviorKind.WORKOUT })
+        val workout = WorkoutBehavior(
+            identity = behaviorIdentity(BehaviorKind.WORKOUT, null, "Run"),
+            displayName = "Run",
+            minutes = 20,
+        )
+        val held = training.scenario.copy(
+            activity = CategoryKnowledge.REVIEWED_NONE,
+            workout = CategoryKnowledge.REVIEWED_ENTRIES,
+            exposures = listOf(workout),
+        )
+        val encoded = encodeCausalConditional(checkNotNull(training.input), held, schema, zone)
+        assertObserved(encoded, schema, CausalFeatureIdentity.BehaviorOov(BehaviorKind.WORKOUT), 1.0)
+        BehaviorKind.entries.filter { it != BehaviorKind.WORKOUT }.forEach { kind ->
+            assertObserved(encoded, schema, CausalFeatureIdentity.BehaviorOov(kind), 0.0)
+        }
+        assertFalse(schema.features.any { it.identity == CausalFeatureIdentity.BehaviorPresent(workout.identity) })
+        assertFalse(schema.features.any { it.identity is CausalFeatureIdentity.WorkoutMinutes })
+    }
+
+    @Test
     fun theEncoderDoesNotFitTheFullHistoryOrReleaseAModel() {
         val source = source(
             "src/main/java/com/orbit/wellness/domain/checkin/CausalFeatureEncoder.kt",
@@ -419,7 +461,7 @@ class CausalFeatureEncoderTest {
         assertFalse(insights.contains("causal-feature-encoder"))
         assertFalse(nav.contains("causal-feature-encoder"))
         assertFalse(source.contains("predictive = true"))
-        assertEquals(CAUSAL_FEATURE_ENCODER_PROTOCOL, "causal-feature-encoder-v2")
+        assertEquals(CAUSAL_FEATURE_ENCODER_PROTOCOL, "causal-feature-encoder-v3")
     }
 
     private fun assertObserved(
