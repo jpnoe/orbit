@@ -21,13 +21,81 @@ import kotlin.math.sqrt
  * A later model may encode this causal history, encode a transition, map the
  * pair to a next latent state, and decode axes, emotion, and uncertainty.
  * That sketch is not implemented in this pass.
+ *
+ * Step momentum asks whether the last recorded change would repeat once.
+ * [rawExtrapolation] keeps that unconstrained result. The official forecast
+ * and residual use [boundedForecast], which stays on 0–10. Trajectory experts
+ * live beside these baselines and are not blended into the aggregate.
  */
-const val WALK_FORWARD_BASELINE_PROTOCOL = "walk-forward-baseline-v1"
+const val WALK_FORWARD_BASELINE_PROTOCOL = "walk-forward-state-baseline-v2"
+
+enum class OverflowDirection {
+    LOWER,
+    UPPER,
+}
+
+/**
+ * An unconstrained extrapolation and the observable 0–10 forecast.
+ * Official residuals use [boundedForecast]. [rawExtrapolation] stays diagnostic.
+ */
+data class ObservableForecast(
+    val rawExtrapolation: Double,
+    val boundedForecast: Double,
+    val overflowDirection: OverflowDirection?,
+    val overflowMagnitude: Double,
+) {
+    init {
+        require(rawExtrapolation.isFinite())
+        require(boundedForecast in FORECAST_FLOOR..FORECAST_CEILING)
+        require(overflowMagnitude >= 0.0 && overflowMagnitude.isFinite())
+        when {
+            rawExtrapolation < FORECAST_FLOOR -> {
+                require(overflowDirection == OverflowDirection.LOWER)
+                require(boundedForecast == FORECAST_FLOOR)
+                require(overflowMagnitude == FORECAST_FLOOR - rawExtrapolation)
+            }
+            rawExtrapolation > FORECAST_CEILING -> {
+                require(overflowDirection == OverflowDirection.UPPER)
+                require(boundedForecast == FORECAST_CEILING)
+                require(overflowMagnitude == rawExtrapolation - FORECAST_CEILING)
+            }
+            else -> {
+                require(overflowDirection == null)
+                require(overflowMagnitude == 0.0)
+                require(boundedForecast == rawExtrapolation)
+            }
+        }
+    }
+}
+
+fun observableForecast(raw: Double): ObservableForecast = when {
+    raw < FORECAST_FLOOR -> ObservableForecast(
+        rawExtrapolation = raw,
+        boundedForecast = FORECAST_FLOOR,
+        overflowDirection = OverflowDirection.LOWER,
+        overflowMagnitude = FORECAST_FLOOR - raw,
+    )
+    raw > FORECAST_CEILING -> ObservableForecast(
+        rawExtrapolation = raw,
+        boundedForecast = FORECAST_CEILING,
+        overflowDirection = OverflowDirection.UPPER,
+        overflowMagnitude = raw - FORECAST_CEILING,
+    )
+    else -> ObservableForecast(
+        rawExtrapolation = raw,
+        boundedForecast = raw,
+        overflowDirection = null,
+        overflowMagnitude = 0.0,
+    )
+}
+
+private const val FORECAST_FLOOR = 0.0
+private const val FORECAST_CEILING = 10.0
 
 enum class BaselineKind {
     PERSISTENCE,
     RECENT_MEAN,
-    MOMENTUM,
+    STEP_MOMENTUM,
 }
 
 enum class EvidenceOrigin {
@@ -126,7 +194,7 @@ sealed interface ForecastEvidence {
         val used: RecentMeanChoice?,
     ) : ForecastEvidence
 
-    data class Momentum(
+    data class StepMomentum(
         val startingRaw: Int?,
         val startingOrigin: EvidenceOrigin,
         val incomingDelta: Int?,
@@ -137,9 +205,12 @@ sealed interface ForecastEvidence {
 data class AxisPredictionRecord(
     val baseline: BaselineKind,
     val axisId: String,
-    val predictedRaw: Double?,
+    val forecast: ObservableForecast?,
     val evidence: ForecastEvidence,
-    val signedError: Double?,
+    /** Actual minus [ObservableForecast.boundedForecast]. This enters the aggregate. */
+    val residual: Double?,
+    /** Actual minus [ObservableForecast.rawExtrapolation]. Diagnostic only. */
+    val rawResidual: Double?,
 )
 
 data class WalkForwardAttempt(
@@ -157,13 +228,22 @@ data class WalkForwardAttempt(
         }
         predictions.forEach { record ->
             val actual = axisTarget.reading(record.axisId).raw
-            val expectedError = if (record.predictedRaw != null && actual != null) {
-                actual - record.predictedRaw
+            val forecast = record.forecast
+            val expectedResidual = if (forecast != null && actual != null) {
+                actual - forecast.boundedForecast
             } else {
                 null
             }
-            require(record.signedError == expectedError) {
-                "Residual is actual minus predicted"
+            val expectedRaw = if (forecast != null && actual != null) {
+                actual - forecast.rawExtrapolation
+            } else {
+                null
+            }
+            require(record.residual == expectedResidual) {
+                "The official residual is actual minus the bounded forecast"
+            }
+            require(record.rawResidual == expectedRaw) {
+                "The raw residual stays separate from the official residual"
             }
         }
     }
@@ -176,7 +256,7 @@ data class AxisBaselineScore(
     val targetObservedCount: Int,
     val predictionAvailableCount: Int,
     val predictionCount: Int,
-    val signedErrorDistribution: NumericSummary?,
+    val residualDistribution: NumericSummary?,
     val bias: Double?,
     val mae: Double?,
     val rmse: Double?,
@@ -190,9 +270,10 @@ data class CommonSupportBaseline(
 )
 
 /**
- * One axis compared where Persistence, Recent mean, and Momentum all predicted
- * the same observed target. A step with only one or two of those forecasts is
- * left out of this comparison.
+ * One axis compared where Persistence, Recent mean, and Step momentum all
+ * predicted the same observed target. A step with only one or two of those
+ * forecasts is left out of this comparison. Trajectory experts are not part
+ * of it.
  */
 data class CommonSupportComparison(
     val axisId: String,
@@ -242,6 +323,7 @@ data class WalkForwardEvaluation(
 data class WalkForwardProjection(
     val evaluation: WalkForwardEvaluation,
     val anchors: List<StateTrajectoryContext>,
+    val experts: TrajectoryExpertDataset,
 )
 
 sealed interface HypotheticalTransition {
@@ -294,6 +376,9 @@ data class SandboxForecast(
     val input: CausalBaselineInput,
     val predictions: List<AxisPredictionRecord>,
     val syntheticTarget: ObservedAxisTarget?,
+    val experts: List<TrajectoryExpert> = emptyList(),
+    val horizonHours: Double? = null,
+    val horizonPreviews: List<TrajectoryHorizonPreview> = emptyList(),
 )
 
 data class SandboxSession(
@@ -304,6 +389,7 @@ data class SandboxSession(
     val weekText: Map<String, String> = emptyMap(),
     val cleared: Set<SandboxFieldKey> = emptySet(),
     val targetText: Map<String, String> = emptyMap(),
+    val horizonText: String = "",
 ) {
     fun withAnchor(index: Int): SandboxSession = SandboxSession(anchorIndex = index)
 
@@ -327,6 +413,17 @@ data class SandboxSession(
 
     fun withTarget(axisId: String, text: String): SandboxSession {
         return copy(targetText = targetText + (axisId to text))
+    }
+
+    fun withHorizon(text: String): SandboxSession = copy(horizonText = text)
+
+    /**
+     * A blank, non-numeric, non-finite, or non-positive entry supplies no
+     * horizon. It does not invent one from a later interval.
+     */
+    fun horizonHours(): Double? {
+        val value = horizonText.trim().toDoubleOrNull() ?: return null
+        return value.takeIf { it.isFinite() && it > 0.0 }
     }
 
     fun change(axisId: String, field: SandboxField): SandboxChange {
@@ -410,6 +507,7 @@ fun projectWalkForward(dataset: CheckInAnalysisDatasetV2): WalkForwardProjection
             metrics = aggregate(attempts),
         ),
         anchors = trajectory.contexts,
+        experts = projectTrajectoryExperts(dataset),
     )
 }
 
@@ -460,16 +558,36 @@ fun applySandboxEdits(
     )
 }
 
-fun runSandbox(anchor: StateTrajectoryContext, scenario: SandboxScenario): SandboxForecast {
+fun runSandbox(
+    anchor: StateTrajectoryContext,
+    scenario: SandboxScenario,
+    experts: List<TrajectoryExpert> = emptyList(),
+    horizonHours: Double? = null,
+): SandboxForecast {
     require(scenario.hypotheticalTransition == HypotheticalTransition.None) {
         "This baseline pass cannot consume a hypothetical transition"
     }
+    if (horizonHours != null) {
+        require(horizonHours.isFinite() && horizonHours > 0.0) {
+            "A sandbox horizon is finite and positive"
+        }
+    }
     val input = applySandboxEdits(anchor, scenario.edits)
+    val anchorExperts = experts.filter { it.stateKey == anchor.stateKey }
     return SandboxForecast(
         anchorKey = anchor.stateKey,
         input = input,
         predictions = forecastBaselines(input, scenario.syntheticTarget),
         syntheticTarget = scenario.syntheticTarget,
+        experts = anchorExperts,
+        horizonHours = horizonHours,
+        horizonPreviews = anchorExperts.map { expert ->
+            val starting = input.axes.single { it.axisId == expert.axisId }.startingRaw
+            TrajectoryHorizonPreview(
+                expert = expert,
+                forecast = projectExpertHorizon(starting, expert, horizonHours),
+            )
+        },
     )
 }
 
@@ -479,27 +597,31 @@ fun forecastBaselines(
 ): List<AxisPredictionRecord> {
     return BaselineKind.entries.flatMap { baseline ->
         input.axes.map { axis ->
-            val predicted = predict(baseline, axis)
+            val forecast = predict(baseline, axis)
             val actual = target?.reading(axis.axisId)?.raw
             AxisPredictionRecord(
                 baseline = baseline,
                 axisId = axis.axisId,
-                predictedRaw = predicted,
+                forecast = forecast,
                 evidence = evidence(baseline, axis),
-                signedError = if (predicted != null && actual != null) actual - predicted else null,
+                residual = if (forecast != null && actual != null) actual - forecast.boundedForecast else null,
+                rawResidual = if (forecast != null && actual != null) actual - forecast.rawExtrapolation else null,
             )
         }
     }
 }
 
-private fun predict(baseline: BaselineKind, axis: CausalAxisReading): Double? = when (baseline) {
-    BaselineKind.PERSISTENCE -> axis.startingRaw?.toDouble()
-    BaselineKind.RECENT_MEAN -> recentMean(axis)?.second
-    BaselineKind.MOMENTUM -> if (axis.startingRaw != null && axis.incomingDelta != null) {
-        (axis.startingRaw + axis.incomingDelta).toDouble()
-    } else {
-        null
+private fun predict(baseline: BaselineKind, axis: CausalAxisReading): ObservableForecast? {
+    val raw = when (baseline) {
+        BaselineKind.PERSISTENCE -> axis.startingRaw?.toDouble()
+        BaselineKind.RECENT_MEAN -> recentMean(axis)?.second
+        BaselineKind.STEP_MOMENTUM -> if (axis.startingRaw != null && axis.incomingDelta != null) {
+            (axis.startingRaw + axis.incomingDelta).toDouble()
+        } else {
+            null
+        }
     }
+    return raw?.let { observableForecast(it) }
 }
 
 private fun evidence(baseline: BaselineKind, axis: CausalAxisReading): ForecastEvidence = when (baseline) {
@@ -511,7 +633,7 @@ private fun evidence(baseline: BaselineKind, axis: CausalAxisReading): ForecastE
         weekOrigin = axis.weekOrigin,
         used = recentMean(axis)?.first,
     )
-    BaselineKind.MOMENTUM -> ForecastEvidence.Momentum(
+    BaselineKind.STEP_MOMENTUM -> ForecastEvidence.StepMomentum(
         startingRaw = axis.startingRaw,
         startingOrigin = axis.startingOrigin,
         incomingDelta = axis.incomingDelta,
@@ -545,16 +667,16 @@ private fun score(
     axisId: String,
 ): AxisBaselineScore {
     val records = attempts.map { attempt -> attempt.prediction(baseline, axisId) }
-    val errors = records.mapNotNull { it.signedError }
+    val errors = records.mapNotNull { it.residual }
     val distribution = populationSummary(errors)
     return AxisBaselineScore(
         baseline = baseline,
         axisId = axisId,
         eligibleCount = attempts.size,
         targetObservedCount = attempts.count { it.axisTarget.reading(axisId).raw != null },
-        predictionAvailableCount = records.count { it.predictedRaw != null },
+        predictionAvailableCount = records.count { it.forecast != null },
         predictionCount = errors.size,
-        signedErrorDistribution = distribution,
+        residualDistribution = distribution,
         bias = distribution?.mean,
         mae = meanOf(errors) { abs(it) },
         rmse = rootMeanSquare(errors),
@@ -568,12 +690,12 @@ private fun commonSupport(
     val shared = attempts.filter { attempt ->
         attempt.axisTarget.reading(axisId).raw != null &&
             BaselineKind.entries.all { baseline ->
-                attempt.prediction(baseline, axisId).predictedRaw != null
+                attempt.prediction(baseline, axisId).forecast != null
             }
     }
     val baselines = BaselineKind.entries.map { baseline ->
         val errors = shared.map { attempt ->
-            checkNotNull(attempt.prediction(baseline, axisId).signedError)
+            checkNotNull(attempt.prediction(baseline, axisId).residual)
         }
         CommonSupportBaseline(
             baseline = baseline,

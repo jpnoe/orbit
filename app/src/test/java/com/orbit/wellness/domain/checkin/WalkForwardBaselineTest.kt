@@ -34,15 +34,15 @@ class WalkForwardBaselineTest {
         assertEquals(4.0, prediction(first, BaselineKind.PERSISTENCE), 0.0)
         assertEquals(2.0, error(first, BaselineKind.PERSISTENCE)!!, 0.0)
         assertNull(predictionOrNull(first, BaselineKind.RECENT_MEAN))
-        assertNull(predictionOrNull(first, BaselineKind.MOMENTUM))
+        assertNull(predictionOrNull(first, BaselineKind.STEP_MOMENTUM))
 
         val second = evaluation.attempts[1]
         assertEquals(6.0, prediction(second, BaselineKind.PERSISTENCE), 0.0)
         assertEquals(-1.0, error(second, BaselineKind.PERSISTENCE)!!, 0.0)
         assertEquals(4.0, prediction(second, BaselineKind.RECENT_MEAN), 0.0)
         assertEquals(1.0, error(second, BaselineKind.RECENT_MEAN)!!, 0.0)
-        assertEquals(8.0, prediction(second, BaselineKind.MOMENTUM), 0.0)
-        assertEquals(-3.0, error(second, BaselineKind.MOMENTUM)!!, 0.0)
+        assertEquals(8.0, prediction(second, BaselineKind.STEP_MOMENTUM), 0.0)
+        assertEquals(-3.0, error(second, BaselineKind.STEP_MOMENTUM)!!, 0.0)
 
         val persistence = score(evaluation, BaselineKind.PERSISTENCE, DefaultCheckInAxes.MOOD)
         assertEquals(2, persistence.eligibleCount)
@@ -52,14 +52,14 @@ class WalkForwardBaselineTest {
         assertEquals(0.5, persistence.bias!!, 1e-9)
         assertEquals(1.5, persistence.mae!!, 1e-9)
         assertEquals(sqrt(2.5), persistence.rmse!!, 1e-9)
-        assertEquals(persistence.bias, persistence.signedErrorDistribution!!.mean, 0.0)
+        assertEquals(persistence.bias, persistence.residualDistribution!!.mean, 0.0)
 
         val support = evaluation.metrics.commonSupport.single { it.axisId == DefaultCheckInAxes.MOOD }
         assertEquals(BaselineKind.entries, support.baselines.map { it.baseline })
         assertEquals(1, support.count)
         assertEquals(1.0, support.baselines.single { it.baseline == BaselineKind.PERSISTENCE }.mae!!, 0.0)
         assertEquals(1.0, support.baselines.single { it.baseline == BaselineKind.RECENT_MEAN }.mae!!, 0.0)
-        assertEquals(3.0, support.baselines.single { it.baseline == BaselineKind.MOMENTUM }.mae!!, 0.0)
+        assertEquals(3.0, support.baselines.single { it.baseline == BaselineKind.STEP_MOMENTUM }.mae!!, 0.0)
 
         val energy = score(evaluation, BaselineKind.PERSISTENCE, DefaultCheckInAxes.ENERGY)
         assertEquals(0, energy.targetObservedCount)
@@ -87,29 +87,120 @@ class WalkForwardBaselineTest {
         assertEquals(8.0, evidence.dayMean!!, 0.0)
         assertEquals(5.0, evidence.weekMean!!, 0.0)
         assertEquals(8.0, prediction(attempt, BaselineKind.RECENT_MEAN), 0.0)
-        assertEquals(2.0, prediction(attempt, BaselineKind.MOMENTUM), 0.0)
+        assertEquals(2.0, prediction(attempt, BaselineKind.STEP_MOMENTUM), 0.0)
     }
 
     @Test
-    fun momentumIsNotClippedAndAnxietyIsNotInverted() {
-        val overshoot = projectWalkForward(
+    fun boundedForecastsOwnTheOfficialResidual() {
+        val lower = projectWalkForward(
+            history(
+                Point("high", 1_000, mood = 4),
+                Point("floor", 2_000, previous = "high", mood = 0),
+                Point("after", 3_000, previous = "floor", mood = 2),
+            ),
+        ).evaluation
+        val lowerRecord = lower.attempts.single { it.transitionId == "after" }.predictions.single {
+            it.baseline == BaselineKind.STEP_MOMENTUM && it.axisId == DefaultCheckInAxes.MOOD
+        }
+        val lowerForecast = checkNotNull(lowerRecord.forecast)
+        assertEquals(-4.0, lowerForecast.rawExtrapolation, 0.0)
+        assertEquals(0.0, lowerForecast.boundedForecast, 0.0)
+        assertEquals(OverflowDirection.LOWER, lowerForecast.overflowDirection)
+        assertEquals(4.0, lowerForecast.overflowMagnitude, 0.0)
+        assertEquals(2.0, lowerRecord.residual!!, 0.0)
+        assertEquals(6.0, lowerRecord.rawResidual!!, 0.0)
+        val lowerScore = score(lower, BaselineKind.STEP_MOMENTUM, DefaultCheckInAxes.MOOD)
+        assertEquals(1, lowerScore.predictionCount)
+        assertEquals(2.0, lowerScore.mae!!, 0.0)
+        assertEquals("Step momentum forecast 0 · raw -4 · lower overflow 4", com.orbit.wellness.ui.insights.forecastSummary(lowerRecord))
+
+        val upper = projectWalkForward(
+            history(
+                Point("calm", 1_000, anxiety = 1),
+                Point("rise", 2_000, previous = "calm", anxiety = 6),
+                Point("later", 3_000, previous = "rise", anxiety = 8),
+            ),
+        ).evaluation
+        val upperRecord = upper.attempts.single { it.transitionId == "later" }.predictions.single {
+            it.baseline == BaselineKind.STEP_MOMENTUM && it.axisId == DefaultCheckInAxes.ANXIETY
+        }
+        val upperForecast = checkNotNull(upperRecord.forecast)
+        assertEquals(11.0, upperForecast.rawExtrapolation, 0.0)
+        assertEquals(10.0, upperForecast.boundedForecast, 0.0)
+        assertEquals(OverflowDirection.UPPER, upperForecast.overflowDirection)
+        assertEquals(1.0, upperForecast.overflowMagnitude, 0.0)
+        assertEquals(-2.0, upperRecord.residual!!, 0.0)
+        assertEquals(-3.0, upperRecord.rawResidual!!, 0.0)
+        assertEquals(2.0, score(upper, BaselineKind.STEP_MOMENTUM, DefaultCheckInAxes.ANXIETY).mae!!, 0.0)
+
+        val inRange = projectWalkForward(
             history(
                 Point("low", 1_000, mood = 7),
                 Point("top", 2_000, previous = "low", mood = 10),
-                Point("after", 3_000, previous = "top", mood = 10),
+                Point("after", 3_000, previous = "top", mood = 9),
             ),
         ).evaluation.attempts.single { it.transitionId == "after" }
-        assertEquals(13.0, prediction(overshoot, BaselineKind.MOMENTUM), 0.0)
+        val held = checkNotNull(inRange.predictions.single {
+            it.baseline == BaselineKind.PERSISTENCE && it.axisId == DefaultCheckInAxes.MOOD
+        }.forecast)
+        assertNull(held.overflowDirection)
+        assertEquals(0.0, held.overflowMagnitude, 0.0)
+        assertEquals(held.rawExtrapolation, held.boundedForecast, 0.0)
 
-        val anxiety = projectWalkForward(
-            history(
-                Point("calm", 1_000, anxiety = 2),
-                Point("uneasy", 2_000, previous = "calm", anxiety = 8),
-            ),
-        ).evaluation.attempts.single()
-        assertEquals(2.0, prediction(anxiety, BaselineKind.PERSISTENCE, DefaultCheckInAxes.ANXIETY), 0.0)
-        assertEquals(6.0, error(anxiety, BaselineKind.PERSISTENCE, DefaultCheckInAxes.ANXIETY)!!, 0.0)
-        assertEquals(8, anxiety.axisTarget.reading(DefaultCheckInAxes.ANXIETY).raw)
+        val anchor = projectWalkForward(
+            history(Point("a", 1_000, mood = 4), Point("b", 2_000, previous = "a", mood = 6)),
+        )
+        val sandbox = runSandbox(
+            anchor.anchors.single { it.stateKey.raw == "a" },
+            SandboxSession.fresh().withText(DefaultCheckInAxes.MOOD, SandboxField.DAY_MEAN, "12").toScenario(),
+        )
+        val mean = checkNotNull(sandbox.predictions.single {
+            it.baseline == BaselineKind.RECENT_MEAN && it.axisId == DefaultCheckInAxes.MOOD
+        }.forecast)
+        assertEquals(12.0, mean.rawExtrapolation, 0.0)
+        assertEquals(10.0, mean.boundedForecast, 0.0)
+        assertEquals(OverflowDirection.UPPER, mean.overflowDirection)
+        assertEquals(2.0, mean.overflowMagnitude, 0.0)
+        assertEquals(WALK_FORWARD_BASELINE_PROTOCOL, lower.protocol)
+    }
+
+    @Test
+    fun aSandboxHorizonDoesNotEnterTheAggregate() {
+        val hour = 3_600_000L
+        val dataset = history(
+            Point("a", hour, mood = 0),
+            Point("b", 2 * hour, previous = "a", mood = 2),
+        )
+        val projection = projectWalkForward(dataset)
+        val anchor = projection.anchors.single { it.stateKey.raw == "b" }
+        val expert = projection.experts.experts.single {
+            it.stateKey == anchor.stateKey &&
+                it.axisId == DefaultCheckInAxes.MOOD &&
+                it.scale == TrajectoryScaleId.IMMEDIATE
+        }
+        assertEquals(2, expert.stepDelta)
+        assertEquals(2.0, expert.slopePerHour!!, 1e-9)
+        val session = SandboxSession.fresh().withHorizon("2")
+        assertEquals(2.0, session.horizonHours()!!, 0.0)
+        assertNull(SandboxSession.fresh().horizonHours())
+        assertNull(SandboxSession.fresh().withHorizon("0").horizonHours())
+        assertNull(SandboxSession.fresh().withHorizon("-3").horizonHours())
+        assertEquals(session.toScenario(), SandboxSession.fresh().toScenario())
+        val preview = runSandbox(anchor, session.toScenario(), listOf(expert), session.horizonHours())
+        val projected = preview.horizonPreviews.single().forecast
+        assertEquals(6.0, checkNotNull(projected).rawExtrapolation, 1e-9)
+        assertEquals(6.0, projected.boundedForecast, 1e-9)
+        assertNull(projectExpertHorizon(2, expert, null))
+        val overridden = runSandbox(
+            anchor,
+            SandboxSession.fresh().withText(DefaultCheckInAxes.MOOD, SandboxField.STARTING, "0").withHorizon("2").toScenario(),
+            listOf(expert),
+            2.0,
+        )
+        assertEquals(2.0, expert.slopePerHour, 1e-9)
+        assertEquals(2, anchor.axes.single { it.axisId == DefaultCheckInAxes.MOOD }.currentRaw)
+        assertEquals(4.0, checkNotNull(overridden.horizonPreviews.single().forecast).rawExtrapolation, 1e-9)
+        assertEquals(projection.evaluation, projectWalkForward(dataset).evaluation)
     }
 
     @Test
@@ -160,7 +251,7 @@ class WalkForwardBaselineTest {
         val gap = evaluation.attempts.single { it.transitionId == "c" }
         assertEquals(6.0, prediction(gap, BaselineKind.PERSISTENCE), 0.0)
         assertNull(predictionOrNull(gap, BaselineKind.RECENT_MEAN))
-        assertEquals(8.0, prediction(gap, BaselineKind.MOMENTUM), 0.0)
+        assertEquals(8.0, prediction(gap, BaselineKind.STEP_MOMENTUM), 0.0)
         val support = evaluation.metrics.commonSupport.single { it.axisId == DefaultCheckInAxes.MOOD }
         assertEquals(BaselineKind.entries, support.baselines.map { it.baseline })
         assertEquals(0, support.count)
@@ -204,7 +295,7 @@ class WalkForwardBaselineTest {
                 it.baseline == BaselineKind.PERSISTENCE && it.axisId == DefaultCheckInAxes.MOOD
             }.evidence as ForecastEvidence.Persistence).origin,
         )
-        assertFalse(projection.evaluation.attempts.flatMap { it.predictions }.any { it.signedError == -8.0 })
+        assertFalse(projection.evaluation.attempts.flatMap { it.predictions }.any { it.residual == -8.0 })
     }
 
     @Test
@@ -233,7 +324,7 @@ class WalkForwardBaselineTest {
         assertNull(reading.incomingDelta)
         assertEquals(EvidenceOrigin.CLEARED, reading.deltaOrigin)
         assertEquals(9.5, prediction(sandbox, BaselineKind.RECENT_MEAN), 0.0)
-        assertNull(predictionOrNull(sandbox, BaselineKind.MOMENTUM))
+        assertNull(predictionOrNull(sandbox, BaselineKind.STEP_MOMENTUM))
         val label = forecastEvidenceLabel(
             sandbox.predictions.single {
                 it.baseline == BaselineKind.RECENT_MEAN && it.axisId == DefaultCheckInAxes.MOOD
@@ -317,7 +408,7 @@ class WalkForwardBaselineTest {
         }
         val scoreNames = fieldNames(AxisBaselineScore::class.java)
         assertTrue(scoreNames.contains("predictionCount"))
-        assertTrue(scoreNames.contains("signedErrorDistribution"))
+        assertTrue(scoreNames.contains("residualDistribution"))
         assertTrue(scoreNames.contains("bias"))
         assertTrue(scoreNames.contains("mae"))
         assertTrue(scoreNames.contains("rmse"))
@@ -396,6 +487,7 @@ class WalkForwardBaselineTest {
         }
         assertFalse(lab.contains("Dao"))
         assertFalse(lab.contains(".insert"))
+        assertFalse(lab.contains("Slider"))
         assertNull(com.orbit.wellness.ui.navigation.OrbitNavigation.researchPreviewRoute(debugBuild = false))
     }
 
@@ -413,31 +505,31 @@ class WalkForwardBaselineTest {
         forecast: SandboxForecast,
         baseline: BaselineKind,
         axisId: String = DefaultCheckInAxes.MOOD,
-    ): Double = checkNotNull(forecast.predictions.single { it.baseline == baseline && it.axisId == axisId }.predictedRaw)
+    ): Double = checkNotNull(forecast.predictions.single { it.baseline == baseline && it.axisId == axisId }.forecast).boundedForecast
 
     private fun predictionOrNull(
         attempt: WalkForwardAttempt,
         baseline: BaselineKind,
         axisId: String = DefaultCheckInAxes.MOOD,
-    ): Double? = attempt.predictions.single { it.baseline == baseline && it.axisId == axisId }.predictedRaw
+    ): Double? = attempt.predictions.single { it.baseline == baseline && it.axisId == axisId }.forecast?.boundedForecast
 
     private fun predictionOrNull(
         forecast: SandboxForecast,
         baseline: BaselineKind,
         axisId: String = DefaultCheckInAxes.MOOD,
-    ): Double? = forecast.predictions.single { it.baseline == baseline && it.axisId == axisId }.predictedRaw
+    ): Double? = forecast.predictions.single { it.baseline == baseline && it.axisId == axisId }.forecast?.boundedForecast
 
     private fun error(
         attempt: WalkForwardAttempt,
         baseline: BaselineKind,
         axisId: String = DefaultCheckInAxes.MOOD,
-    ): Double? = attempt.predictions.single { it.baseline == baseline && it.axisId == axisId }.signedError
+    ): Double? = attempt.predictions.single { it.baseline == baseline && it.axisId == axisId }.residual
 
     private fun error(
         forecast: SandboxForecast,
         baseline: BaselineKind,
         axisId: String = DefaultCheckInAxes.MOOD,
-    ): Double? = forecast.predictions.single { it.baseline == baseline && it.axisId == axisId }.signedError
+    ): Double? = forecast.predictions.single { it.baseline == baseline && it.axisId == axisId }.residual
 
     private fun score(
         evaluation: WalkForwardEvaluation,
