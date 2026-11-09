@@ -13,6 +13,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -173,11 +174,11 @@ class WalkForwardBaselineTest {
         )
         val projection = projectWalkForward(dataset)
         val anchor = projection.anchors.single { it.stateKey.raw == "b" }
-        val expert = projection.experts.experts.single {
-            it.stateKey == anchor.stateKey &&
-                it.axisId == DefaultCheckInAxes.MOOD &&
-                it.scale == TrajectoryScaleId.IMMEDIATE
-        }
+        val expert = projection.stateSide.states.single { it.trajectory.stateKey == anchor.stateKey }
+            .pathExperts.single {
+                it.axisId == DefaultCheckInAxes.MOOD && it.scale == TrajectoryScaleId.IMMEDIATE_PATH
+            }
+        assertSame(anchor, projection.stateSide.states.single { it.trajectory.stateKey == anchor.stateKey }.trajectory)
         assertEquals(2, expert.stepDelta)
         assertEquals(2.0, expert.slopePerHour!!, 1e-9)
         val session = SandboxSession.fresh().withHorizon("2")

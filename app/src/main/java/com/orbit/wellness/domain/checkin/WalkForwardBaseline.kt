@@ -323,7 +323,7 @@ data class WalkForwardEvaluation(
 data class WalkForwardProjection(
     val evaluation: WalkForwardEvaluation,
     val anchors: List<StateTrajectoryContext>,
-    val experts: TrajectoryExpertDataset,
+    val stateSide: CausalStateSideDataset,
 )
 
 sealed interface HypotheticalTransition {
@@ -486,13 +486,13 @@ data class SandboxSession(
 
 fun projectWalkForward(dataset: CheckInAnalysisDatasetV2): WalkForwardProjection {
     val graph = projectAlternatingTemporalGraph(dataset)
-    val trajectory = projectStateTrajectoryContext(dataset)
-    val byKey = trajectory.contexts.associateBy { it.stateKey }
+    val side = projectCausalStateSide(dataset)
+    val byKey = side.states.associateBy { it.trajectory.stateKey }
     val attempts = graph.causalSteps.filter { it.eligibility.eligible }.map { step ->
         val starting = checkNotNull(step.input.startingState) {
             "An eligible step has a resolved start"
         }
-        val anchor = checkNotNull(byKey[StateOccurrenceKey(starting.checkInId)])
+        val anchor = checkNotNull(byKey[StateOccurrenceKey(starting.checkInId)]).trajectory
         val target = observedAxisTarget(step.target.endingState)
         WalkForwardAttempt(
             transitionId = step.input.transitionId,
@@ -506,8 +506,8 @@ fun projectWalkForward(dataset: CheckInAnalysisDatasetV2): WalkForwardProjection
             attempts = attempts,
             metrics = aggregate(attempts),
         ),
-        anchors = trajectory.contexts,
-        experts = projectTrajectoryExperts(dataset),
+        anchors = side.states.map { it.trajectory },
+        stateSide = side,
     )
 }
 

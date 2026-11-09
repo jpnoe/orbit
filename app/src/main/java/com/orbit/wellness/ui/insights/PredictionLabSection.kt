@@ -19,7 +19,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.orbit.wellness.data.local.DefaultCheckInAxes
 import com.orbit.wellness.domain.checkin.AxisPredictionRecord
+import com.orbit.wellness.domain.checkin.BackgroundDeviation
 import com.orbit.wellness.domain.checkin.BaselineKind
+import com.orbit.wellness.domain.checkin.CausalStateSide
+import com.orbit.wellness.domain.checkin.CausalStateSideDataset
 import com.orbit.wellness.domain.checkin.EvidenceOrigin
 import com.orbit.wellness.domain.checkin.ForecastEvidence
 import com.orbit.wellness.domain.checkin.ObservableForecast
@@ -28,6 +31,7 @@ import com.orbit.wellness.domain.checkin.RecentMeanChoice
 import com.orbit.wellness.domain.checkin.SandboxField
 import com.orbit.wellness.domain.checkin.SandboxSession
 import com.orbit.wellness.domain.checkin.StateTrajectoryContext
+import com.orbit.wellness.domain.checkin.TrajectoryContinuity
 import com.orbit.wellness.domain.checkin.TrajectoryExpert
 import com.orbit.wellness.domain.checkin.TrajectoryExpertGap
 import com.orbit.wellness.domain.checkin.TrajectoryHorizonPreview
@@ -53,7 +57,8 @@ internal object PredictionLabCopy {
     const val SUPPORT =
         "Common support compares Persistence, Recent mean, and Step momentum only where all three predicted the same observed target."
     const val RESIDUAL = "Residual is actual minus the bounded forecast. Positive means the axis ended higher than that forecast."
-    const val EXPERTS = "Trajectory experts are evidence channels. Recorded replay does not project them onto a later check-in, and they stay out of the aggregate."
+    const val EXPERTS =
+        "Trajectory experts are evidence channels. A continuous path follows one waking trajectory. A sampled background can cross a wake or day boundary. Recorded replay does not project either onto a later check-in, and they stay out of the aggregate."
     const val HORIZON = "Forecast horizon in hours"
     const val LOCAL_ERROR = "This error stays in the sandbox."
     const val LOGGED = "Logged"
@@ -101,7 +106,7 @@ private fun PredictionLab(
         }
         when (mode) {
             PredictionLabMode.REPLAY -> RecordedReplayPane(projection)
-            PredictionLabMode.SANDBOX -> PredictionSandboxPane(projection.anchors, projection.experts.experts)
+            PredictionLabMode.SANDBOX -> PredictionSandboxPane(projection.anchors, projection.stateSide)
         }
     }
 }
@@ -129,7 +134,7 @@ private fun RecordedReplayPane(projection: com.orbit.wellness.domain.checkin.Wal
             Text("Transition ${attempt.transitionId}. Anchor ${attempt.anchorKey.raw}.")
             AttemptForecasts(
                 attempt = attempt,
-                experts = projection.experts.experts.filter { it.stateKey == attempt.anchorKey },
+                side = projection.stateSide.states.single { it.trajectory.stateKey == attempt.anchorKey },
             )
         }
         TextButton(onClick = { showMetrics = !showMetrics }) {
@@ -142,7 +147,7 @@ private fun RecordedReplayPane(projection: com.orbit.wellness.domain.checkin.Wal
 @Composable
 private fun PredictionSandboxPane(
     anchors: List<StateTrajectoryContext>,
-    experts: List<TrajectoryExpert>,
+    stateSide: CausalStateSideDataset,
 ) {
     var session by remember { mutableStateOf(SandboxSession.fresh()) }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -150,7 +155,7 @@ private fun PredictionSandboxPane(
         if (anchors.isEmpty()) {
             Text(PredictionLabCopy.NO_ANCHORS)
         } else {
-            SandboxEditors(anchors, experts, session) { session = it }
+            SandboxEditors(anchors, stateSide, session) { session = it }
         }
     }
 }
@@ -158,7 +163,7 @@ private fun PredictionSandboxPane(
 @Composable
 private fun SandboxEditors(
     anchors: List<StateTrajectoryContext>,
-    experts: List<TrajectoryExpert>,
+    stateSide: CausalStateSideDataset,
     session: SandboxSession,
     onSession: (SandboxSession) -> Unit,
 ) {
@@ -185,11 +190,11 @@ private fun SandboxEditors(
         if (session.horizonText.isNotBlank() && session.horizonHours() == null) {
             Text("That horizon is not used.")
         }
-        val anchorExperts = experts.filter { it.stateKey == anchor.stateKey }
+        val side = stateSide.states.single { it.trajectory.stateKey == anchor.stateKey }
         val forecast = runSandbox(
             anchor,
             session.toScenario(),
-            anchorExperts,
+            side.pathExperts + side.backgroundExperts,
             session.horizonHours(),
         )
         anchor.axes.forEach { axis ->
@@ -244,10 +249,8 @@ private fun SandboxEditors(
         forecast.predictions.groupBy { it.axisId }.forEach { (axisId, records) ->
             Text(axisLabel(axisId), style = MaterialTheme.typography.titleSmall)
             records.forEach { record -> ForecastRow(record) }
-            forecast.horizonPreviews.filter { it.expert.axisId == axisId }.forEach { preview ->
-                ExpertLine(preview)
-            }
         }
+        TrajectoryGroups(side, forecast.horizonPreviews)
         if (forecast.syntheticTarget != null) {
             Text(PredictionLabCopy.LOCAL_ERROR)
             forecast.predictions.filter { it.residual != null }.forEach { record ->
@@ -289,7 +292,7 @@ private fun SandboxEditor(
 @Composable
 private fun AttemptForecasts(
     attempt: WalkForwardAttempt,
-    experts: List<TrajectoryExpert>,
+    side: CausalStateSide,
 ) {
     Text(PredictionLabCopy.RESIDUAL)
     Text(PredictionLabCopy.EXPERTS)
@@ -301,10 +304,8 @@ private fun AttemptForecasts(
         attempt.predictions.filter { it.axisId == reading.axisId }.forEach { record ->
             ForecastRow(record)
         }
-        experts.filter { it.axisId == reading.axisId }.forEach { expert ->
-            Text(expertLabel(expert))
-        }
     }
+    TrajectoryGroups(side)
 }
 
 @Composable
@@ -323,12 +324,60 @@ private fun ForecastRow(record: AxisPredictionRecord) {
 }
 
 @Composable
-private fun ExpertLine(preview: TrajectoryHorizonPreview) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(expertLabel(preview.expert))
-        preview.forecast?.let { forecast ->
-            Text(horizonForecastLabel(preview.expert.scale, forecast))
+private fun TrajectoryGroups(
+    side: CausalStateSide,
+    previews: List<TrajectoryHorizonPreview> = emptyList(),
+) {
+    var pathOpen by remember(side.trajectory.stateKey) { mutableStateOf(false) }
+    var backgroundOpen by remember(side.trajectory.stateKey) { mutableStateOf(false) }
+    TextButton(onClick = { pathOpen = !pathOpen }) {
+        Text("Within current waking path")
+    }
+    if (pathOpen) {
+        ExpertGroup(side.pathExperts, emptyList(), previews)
+    }
+    TextButton(onClick = { backgroundOpen = !backgroundOpen }) {
+        Text("Earlier temporal background")
+    }
+    if (backgroundOpen) {
+        ExpertGroup(side.backgroundExperts, side.backgroundDeviations, previews)
+    }
+}
+
+@Composable
+private fun ExpertGroup(
+    experts: List<TrajectoryExpert>,
+    deviations: List<BackgroundDeviation>,
+    previews: List<TrajectoryHorizonPreview>,
+) {
+    experts.groupBy { it.axisId }.forEach { (axisId, axisExperts) ->
+        Text(axisLabel(axisId), style = MaterialTheme.typography.titleSmall)
+        axisExperts.forEach { expert ->
+            ExpertLine(
+                expert = expert,
+                deviation = deviations.singleOrNull { it.axisId == expert.axisId && it.scale == expert.scale },
+                preview = previews.singleOrNull { it.expert.axisId == expert.axisId && it.expert.scale == expert.scale },
+            )
         }
+    }
+}
+
+@Composable
+private fun ExpertLine(
+    expert: TrajectoryExpert,
+    deviation: BackgroundDeviation?,
+    preview: TrajectoryHorizonPreview?,
+) {
+    var technical by remember(expert.stateKey, expert.axisId, expert.scale) { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(expertCompactLabel(expert, deviation))
+        preview?.forecast?.let { forecast ->
+            Text(horizonForecastLabel(expert.scale, forecast))
+        }
+        TextButton(onClick = { technical = !technical }) {
+            Text("Technical details")
+        }
+        if (technical) Text(expertTechnicalLabel(expert))
     }
 }
 
@@ -413,16 +462,39 @@ internal fun horizonForecastLabel(scale: TrajectoryScaleId, forecast: Observable
     return "${scaleLabel(scale)} ${forecastPhrase(forecast)}"
 }
 
-internal fun expertLabel(expert: TrajectoryExpert): String {
+internal fun expertCompactLabel(expert: TrajectoryExpert, deviation: BackgroundDeviation? = null): String {
     val name = scaleLabel(expert.scale)
-    val support = "${expert.observedCount} states"
-    val delta = expert.stepDelta?.let { " · step delta $it" }.orEmpty()
+    val continuity = when (expert.continuity) {
+        TrajectoryContinuity.CONTINUOUS_PATH -> "continuous path"
+        TrajectoryContinuity.SAMPLED_BACKGROUND -> "sampled background"
+    }
     val slope = expert.slopePerHour
     if (slope == null) {
-        return "$name unavailable (${gapLabel(expert.unavailable)}) · $support$delta"
+        return "$name · $continuity · ${gapLabel(expert.unavailable)}"
     }
-    val span = expert.elapsedMillis?.let { " · span ${formatBaselineValue(it / 3_600_000.0)} h" }.orEmpty()
-    return "$name slope ${formatBaselineValue(slope)} points/hour$delta · $support$span"
+    val span = expert.elapsedMillis?.let { formatBaselineValue(it / 3_600_000.0) } ?: "0"
+    val noise = expert.fitResidualDeviation?.let { formatBaselineValue(it) } ?: "none"
+    val compared = deviation?.currentMinusBackgroundMean?.let {
+        " · current minus background mean ${formatBaselineValue(it)}"
+    }.orEmpty()
+    return "$name · $continuity · slope ${formatBaselineValue(slope)} · " +
+        "${expert.observedCount} observations · ${expert.distinctTimestampCount} times · " +
+        "span $span h · fit $noise$compared"
+}
+
+internal fun expertTechnicalLabel(expert: TrajectoryExpert): String {
+    val summary = expert.valueSummary
+    val stats = if (summary == null) {
+        "no value summary"
+    } else {
+        "mean ${formatBaselineValue(summary.mean)} · deviation ${formatBaselineValue(summary.deviation)} · " +
+            "min ${formatBaselineValue(summary.minimum)} · max ${formatBaselineValue(summary.maximum)}"
+    }
+    val focal = if (expert.focalIncluded) "focal included" else "focal excluded"
+    val breakText = expert.pathBreak?.let { " · path break $it" }.orEmpty()
+    val delta = expert.stepDelta?.let { " · step delta $it" }.orEmpty()
+    val keys = expert.occurrenceKeys.joinToString(", ") { it.raw }
+    return "$stats · $focal$breakText$delta · states $keys"
 }
 
 private fun forecastPhrase(forecast: ObservableForecast): String {
@@ -441,10 +513,11 @@ private fun forecastPhrase(forecast: ObservableForecast): String {
 }
 
 private fun scaleLabel(scale: TrajectoryScaleId): String = when (scale) {
-    TrajectoryScaleId.IMMEDIATE -> "Immediate"
-    TrajectoryScaleId.HOURS_6 -> "6-hour"
-    TrajectoryScaleId.HOURS_24 -> "24-hour"
-    TrajectoryScaleId.DAYS_7 -> "7-day"
+    TrajectoryScaleId.IMMEDIATE_PATH -> "Immediate path"
+    TrajectoryScaleId.SIX_HOUR_PATH -> "Six-hour path"
+    TrajectoryScaleId.WAKE_CYCLE_PATH -> "Wake-cycle path"
+    TrajectoryScaleId.TRAILING_24_HOUR_BACKGROUND -> "Prior 24 hours"
+    TrajectoryScaleId.TRAILING_7_DAY_BACKGROUND -> "Prior 7 days"
 }
 
 private fun gapLabel(gap: TrajectoryExpertGap?): String = when (gap) {
