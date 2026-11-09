@@ -32,36 +32,34 @@ class WalkForwardBaselineTest {
         assertEquals(listOf("b", "c"), evaluation.attempts.map { it.transitionId })
         val first = evaluation.attempts[0]
         assertEquals(4.0, prediction(first, BaselineKind.PERSISTENCE), 0.0)
-        assertEquals(-2.0, error(first, BaselineKind.PERSISTENCE)!!, 0.0)
+        assertEquals(2.0, error(first, BaselineKind.PERSISTENCE)!!, 0.0)
         assertNull(predictionOrNull(first, BaselineKind.RECENT_MEAN))
         assertNull(predictionOrNull(first, BaselineKind.MOMENTUM))
 
         val second = evaluation.attempts[1]
         assertEquals(6.0, prediction(second, BaselineKind.PERSISTENCE), 0.0)
-        assertEquals(1.0, error(second, BaselineKind.PERSISTENCE)!!, 0.0)
+        assertEquals(-1.0, error(second, BaselineKind.PERSISTENCE)!!, 0.0)
         assertEquals(4.0, prediction(second, BaselineKind.RECENT_MEAN), 0.0)
-        assertEquals(-1.0, error(second, BaselineKind.RECENT_MEAN)!!, 0.0)
+        assertEquals(1.0, error(second, BaselineKind.RECENT_MEAN)!!, 0.0)
         assertEquals(8.0, prediction(second, BaselineKind.MOMENTUM), 0.0)
-        assertEquals(3.0, error(second, BaselineKind.MOMENTUM)!!, 0.0)
+        assertEquals(-3.0, error(second, BaselineKind.MOMENTUM)!!, 0.0)
 
         val persistence = score(evaluation, BaselineKind.PERSISTENCE, DefaultCheckInAxes.MOOD)
         assertEquals(2, persistence.eligibleCount)
         assertEquals(2, persistence.targetObservedCount)
         assertEquals(2, persistence.predictionAvailableCount)
         assertEquals(2, persistence.predictionCount)
-        assertEquals(-0.5, persistence.bias!!, 1e-9)
+        assertEquals(0.5, persistence.bias!!, 1e-9)
         assertEquals(1.5, persistence.mae!!, 1e-9)
         assertEquals(sqrt(2.5), persistence.rmse!!, 1e-9)
         assertEquals(persistence.bias, persistence.signedErrorDistribution!!.mean, 0.0)
 
-        val support = evaluation.metrics.commonSupport.single {
-            it.axisId == DefaultCheckInAxes.MOOD &&
-                it.first == BaselineKind.PERSISTENCE &&
-                it.second == BaselineKind.MOMENTUM
-        }
+        val support = evaluation.metrics.commonSupport.single { it.axisId == DefaultCheckInAxes.MOOD }
+        assertEquals(BaselineKind.entries, support.baselines.map { it.baseline })
         assertEquals(1, support.count)
-        assertEquals(1.0, support.firstMae!!, 0.0)
-        assertEquals(3.0, support.secondMae!!, 0.0)
+        assertEquals(1.0, support.baselines.single { it.baseline == BaselineKind.PERSISTENCE }.mae!!, 0.0)
+        assertEquals(1.0, support.baselines.single { it.baseline == BaselineKind.RECENT_MEAN }.mae!!, 0.0)
+        assertEquals(3.0, support.baselines.single { it.baseline == BaselineKind.MOMENTUM }.mae!!, 0.0)
 
         val energy = score(evaluation, BaselineKind.PERSISTENCE, DefaultCheckInAxes.ENERGY)
         assertEquals(0, energy.targetObservedCount)
@@ -110,7 +108,7 @@ class WalkForwardBaselineTest {
             ),
         ).evaluation.attempts.single()
         assertEquals(2.0, prediction(anxiety, BaselineKind.PERSISTENCE, DefaultCheckInAxes.ANXIETY), 0.0)
-        assertEquals(-6.0, error(anxiety, BaselineKind.PERSISTENCE, DefaultCheckInAxes.ANXIETY)!!, 0.0)
+        assertEquals(6.0, error(anxiety, BaselineKind.PERSISTENCE, DefaultCheckInAxes.ANXIETY)!!, 0.0)
         assertEquals(8, anxiety.axisTarget.reading(DefaultCheckInAxes.ANXIETY).raw)
     }
 
@@ -142,11 +140,32 @@ class WalkForwardBaselineTest {
             ),
         ).evaluation.attempts.single()
         assertEquals(0.0, prediction(zero, BaselineKind.PERSISTENCE), 0.0)
-        assertEquals(-4.0, error(zero, BaselineKind.PERSISTENCE)!!, 0.0)
+        assertEquals(4.0, error(zero, BaselineKind.PERSISTENCE)!!, 0.0)
         val evidence = zero.predictions.single {
             it.baseline == BaselineKind.PERSISTENCE && it.axisId == DefaultCheckInAxes.MOOD
         }.evidence as ForecastEvidence.Persistence
         assertEquals(EvidenceOrigin.OBSERVED, evidence.origin)
+    }
+
+    @Test
+    fun commonSupportRequiresEveryBaseline() {
+        val day = 24 * 3_600_000L
+        val evaluation = projectWalkForward(
+            history(
+                Point("a", 0, mood = 4),
+                Point("b", 8 * day, previous = "a", mood = 6),
+                Point("c", 8 * day + 3_600_000L, previous = "b", mood = 5),
+            ),
+        ).evaluation
+        val gap = evaluation.attempts.single { it.transitionId == "c" }
+        assertEquals(6.0, prediction(gap, BaselineKind.PERSISTENCE), 0.0)
+        assertNull(predictionOrNull(gap, BaselineKind.RECENT_MEAN))
+        assertEquals(8.0, prediction(gap, BaselineKind.MOMENTUM), 0.0)
+        val support = evaluation.metrics.commonSupport.single { it.axisId == DefaultCheckInAxes.MOOD }
+        assertEquals(BaselineKind.entries, support.baselines.map { it.baseline })
+        assertEquals(0, support.count)
+        assertTrue(support.baselines.all { it.bias == null && it.mae == null && it.rmse == null })
+        assertEquals(2, score(evaluation, BaselineKind.PERSISTENCE, DefaultCheckInAxes.MOOD).predictionCount)
     }
 
     @Test
@@ -176,16 +195,16 @@ class WalkForwardBaselineTest {
         assertEquals(4, anchor.axes.single { it.axisId == DefaultCheckInAxes.MOOD }.currentRaw)
         assertEquals(projection.evaluation, again.evaluation)
         assertEquals(1, projection.evaluation.attempts.size)
-        assertEquals(-2.0, error(projection.evaluation.attempts.single(), BaselineKind.PERSISTENCE)!!, 0.0)
+        assertEquals(2.0, error(projection.evaluation.attempts.single(), BaselineKind.PERSISTENCE)!!, 0.0)
         assertEquals(9.0, prediction(sandbox, BaselineKind.PERSISTENCE), 0.0)
-        assertEquals(8.0, error(sandbox, BaselineKind.PERSISTENCE)!!, 0.0)
+        assertEquals(-8.0, error(sandbox, BaselineKind.PERSISTENCE)!!, 0.0)
         assertEquals(
             EvidenceOrigin.OVERRIDDEN,
             (sandbox.predictions.single {
                 it.baseline == BaselineKind.PERSISTENCE && it.axisId == DefaultCheckInAxes.MOOD
             }.evidence as ForecastEvidence.Persistence).origin,
         )
-        assertFalse(projection.evaluation.attempts.flatMap { it.predictions }.any { it.signedError == 8.0 })
+        assertFalse(projection.evaluation.attempts.flatMap { it.predictions }.any { it.signedError == -8.0 })
     }
 
     @Test

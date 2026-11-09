@@ -158,11 +158,13 @@ data class WalkForwardAttempt(
         predictions.forEach { record ->
             val actual = axisTarget.reading(record.axisId).raw
             val expectedError = if (record.predictedRaw != null && actual != null) {
-                record.predictedRaw - actual
+                actual - record.predictedRaw
             } else {
                 null
             }
-            require(record.signedError == expectedError) { "Signed error is predicted minus actual" }
+            require(record.signedError == expectedError) {
+                "Residual is actual minus predicted"
+            }
         }
     }
 }
@@ -180,18 +182,35 @@ data class AxisBaselineScore(
     val rmse: Double?,
 )
 
+data class CommonSupportBaseline(
+    val baseline: BaselineKind,
+    val bias: Double?,
+    val mae: Double?,
+    val rmse: Double?,
+)
+
+/**
+ * One axis compared where Persistence, Recent mean, and Momentum all predicted
+ * the same observed target. A step with only one or two of those forecasts is
+ * left out of this comparison.
+ */
 data class CommonSupportComparison(
     val axisId: String,
-    val first: BaselineKind,
-    val second: BaselineKind,
     val count: Int,
-    val firstBias: Double?,
-    val secondBias: Double?,
-    val firstMae: Double?,
-    val secondMae: Double?,
-    val firstRmse: Double?,
-    val secondRmse: Double?,
-)
+    val baselines: List<CommonSupportBaseline>,
+) {
+    init {
+        require(baselines.map { it.baseline } == BaselineKind.entries) {
+            "Common support includes every baseline"
+        }
+        require(count >= 0)
+        baselines.forEach { baseline ->
+            require((baseline.mae == null) == (count == 0)) {
+                "An empty common support has no error"
+            }
+        }
+    }
+}
 
 data class WalkForwardMetrics(
     val scores: List<AxisBaselineScore>,
@@ -467,7 +486,7 @@ fun forecastBaselines(
                 axisId = axis.axisId,
                 predictedRaw = predicted,
                 evidence = evidence(baseline, axis),
-                signedError = if (predicted != null && actual != null) predicted - actual else null,
+                signedError = if (predicted != null && actual != null) actual - predicted else null,
             )
         }
     }
@@ -516,14 +535,7 @@ private fun aggregate(attempts: List<WalkForwardAttempt>): WalkForwardMetrics {
     val scores = BaselineKind.entries.flatMap { baseline ->
         axes.map { axisId -> score(attempts, baseline, axisId) }
     }
-    val pairs = listOf(
-        BaselineKind.PERSISTENCE to BaselineKind.RECENT_MEAN,
-        BaselineKind.PERSISTENCE to BaselineKind.MOMENTUM,
-        BaselineKind.RECENT_MEAN to BaselineKind.MOMENTUM,
-    )
-    val support = pairs.flatMap { (first, second) ->
-        axes.map { axisId -> commonSupport(attempts, first, second, axisId) }
-    }
+    val support = axes.map { axisId -> commonSupport(attempts, axisId) }
     return WalkForwardMetrics(scores, support)
 }
 
@@ -551,33 +563,29 @@ private fun score(
 
 private fun commonSupport(
     attempts: List<WalkForwardAttempt>,
-    first: BaselineKind,
-    second: BaselineKind,
     axisId: String,
 ): CommonSupportComparison {
-    val paired = attempts.mapNotNull { attempt ->
-        val left = attempt.prediction(first, axisId)
-        val right = attempt.prediction(second, axisId)
-        val actual = attempt.axisTarget.reading(axisId).raw
-        if (left.predictedRaw == null || right.predictedRaw == null || actual == null) {
-            null
-        } else {
-            checkNotNull(left.signedError) to checkNotNull(right.signedError)
-        }
+    val shared = attempts.filter { attempt ->
+        attempt.axisTarget.reading(axisId).raw != null &&
+            BaselineKind.entries.all { baseline ->
+                attempt.prediction(baseline, axisId).predictedRaw != null
+            }
     }
-    val leftErrors = paired.map { it.first }
-    val rightErrors = paired.map { it.second }
+    val baselines = BaselineKind.entries.map { baseline ->
+        val errors = shared.map { attempt ->
+            checkNotNull(attempt.prediction(baseline, axisId).signedError)
+        }
+        CommonSupportBaseline(
+            baseline = baseline,
+            bias = meanOf(errors) { it },
+            mae = meanOf(errors) { abs(it) },
+            rmse = rootMeanSquare(errors),
+        )
+    }
     return CommonSupportComparison(
         axisId = axisId,
-        first = first,
-        second = second,
-        count = paired.size,
-        firstBias = meanOf(leftErrors) { it },
-        secondBias = meanOf(rightErrors) { it },
-        firstMae = meanOf(leftErrors) { abs(it) },
-        secondMae = meanOf(rightErrors) { abs(it) },
-        firstRmse = rootMeanSquare(leftErrors),
-        secondRmse = rootMeanSquare(rightErrors),
+        count = shared.size,
+        baselines = baselines,
     )
 }
 

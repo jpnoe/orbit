@@ -45,7 +45,9 @@ internal object PredictionLabCopy {
     const val NO_ATTEMPTS = "No eligible transition was recorded."
     const val NO_ANCHORS = "No state occurrence is available."
     const val METRICS = "Aggregate"
-    const val SUPPORT = "Common support compares baselines only where both predicted the same observed target."
+    const val SUPPORT =
+        "Common support compares Persistence, Recent mean, and Momentum only where all three predicted the same observed target."
+    const val RESIDUAL = "Residual is actual minus predicted. Positive means the axis ended higher than the baseline."
     const val SLIDER_NOTE = "The slider position is limited to 0–10. The reported prediction is not."
     const val LOCAL_ERROR = "This error stays in the sandbox."
     const val LOGGED = "Logged"
@@ -209,6 +211,7 @@ private fun SandboxEditors(
             )
         }
         Text(PredictionLabCopy.SLIDER_NOTE)
+        Text(PredictionLabCopy.RESIDUAL)
         forecast.predictions.groupBy { it.axisId }.forEach { (axisId, records) ->
             Text(axisLabel(axisId), style = MaterialTheme.typography.titleSmall)
             records.forEach { record -> ForecastRow(record) }
@@ -217,7 +220,7 @@ private fun SandboxEditors(
             Text(PredictionLabCopy.LOCAL_ERROR)
             forecast.predictions.filter { it.signedError != null }.forEach { record ->
                 Text(
-                    "${baselineLabel(record.baseline)} ${axisLabel(record.axisId)} signed error ${formatBaselineValue(checkNotNull(record.signedError))}",
+                    "${baselineLabel(record.baseline)} ${axisLabel(record.axisId)} residual ${formatBaselineValue(checkNotNull(record.signedError))}",
                 )
             }
         }
@@ -253,7 +256,8 @@ private fun SandboxEditor(
 
 @Composable
 private fun AttemptForecasts(attempt: WalkForwardAttempt) {
-    Text(PredictionLabCopy.SLIDER_NOTE)
+        Text(PredictionLabCopy.SLIDER_NOTE)
+    Text(PredictionLabCopy.RESIDUAL)
     attempt.axisTarget.readings.forEach { reading ->
         Text(
             "${axisLabel(reading.axisId)} actual ${reading.raw?.toString() ?: "Missing"}",
@@ -280,7 +284,7 @@ private fun ForecastRow(record: AxisPredictionRecord) {
             )
         }
         record.signedError?.let { error ->
-            Text("Signed error ${formatBaselineValue(error)}")
+            Text("Residual ${formatBaselineValue(error)}")
         }
     }
 }
@@ -302,7 +306,7 @@ private fun MetricsBlock(metrics: WalkForwardMetrics) {
             val distribution = score.signedErrorDistribution
             if (distribution != null) {
                 Text(
-                    "Signed errors ${distribution.count}: mean ${formatBaselineValue(distribution.mean)}, " +
+                    "Residuals ${distribution.count}: mean ${formatBaselineValue(distribution.mean)}, " +
                         "deviation ${formatBaselineValue(distribution.deviation)}, " +
                         "min ${formatBaselineValue(distribution.minimum)}, " +
                         "max ${formatBaselineValue(distribution.maximum)}",
@@ -311,16 +315,12 @@ private fun MetricsBlock(metrics: WalkForwardMetrics) {
         }
         Text(PredictionLabCopy.SUPPORT)
         metrics.commonSupport.forEach { comparison ->
-            Text(
-                "${axisLabel(comparison.axisId)} ${baselineLabel(comparison.first)} and ${baselineLabel(comparison.second)}: " +
-                    "count ${comparison.count}, " +
-                    "MAE ${comparison.firstMae?.let { formatBaselineValue(it) } ?: "none"} and " +
-                    "${comparison.secondMae?.let { formatBaselineValue(it) } ?: "none"}, " +
-                    "RMSE ${comparison.firstRmse?.let { formatBaselineValue(it) } ?: "none"} and " +
-                    "${comparison.secondRmse?.let { formatBaselineValue(it) } ?: "none"}, " +
-                    "bias ${comparison.firstBias?.let { formatBaselineValue(it) } ?: "none"} and " +
-                    "${comparison.secondBias?.let { formatBaselineValue(it) } ?: "none"}",
-            )
+            val baselines = comparison.baselines.joinToString("; ") { baseline ->
+                "${baselineLabel(baseline.baseline)} MAE ${baseline.mae?.let { formatBaselineValue(it) } ?: "none"}, " +
+                    "RMSE ${baseline.rmse?.let { formatBaselineValue(it) } ?: "none"}, " +
+                    "bias ${baseline.bias?.let { formatBaselineValue(it) } ?: "none"}"
+            }
+            Text("${axisLabel(comparison.axisId)} count ${comparison.count}: $baselines")
         }
     }
 }
