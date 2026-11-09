@@ -588,11 +588,16 @@ private fun CausalPreparationSection(
     } else {
         Text(causalPreparationFoldLabel("State", stateFold))
         Text(causalPreparationFoldLabel("Conditional", conditionalFold))
+        var technical by remember(transitionId) { mutableStateOf(false) }
+        TextButton(onClick = { technical = !technical }) {
+            Text("Technical details")
+        }
+        if (technical) Text(causalPreparationUnseenLabel(conditionalFold))
     }
 }
 
 internal fun causalPreparationIntro(): String {
-    return "Cutoff is an ending strictly before the forecast origin. Event-time reconstruction. Not strict as known."
+    return "Prior outcome ended before the forecast origin, or ended at the origin as the exact anchor state. Event-time reconstruction. Not strict as known."
 }
 
 internal fun causalPreparationFoldLabel(title: String, fold: CausalWalkForwardFold): String {
@@ -609,6 +614,11 @@ internal fun causalPreparationFoldLabel(title: String, fold: CausalWalkForwardFo
     val provenance = fold.provenance?.let { " · ${it.name.lowercase().replace('_', ' ')} retrospective" }.orEmpty()
     return "$title · $availability · origin $origin · priors ${fold.qualifyingPriorInputIds.size} · " +
         "base features $base · prepared columns $columns · support $support · oov $oov$provenance"
+}
+
+internal fun causalPreparationUnseenLabel(fold: CausalWalkForwardFold): String {
+    if (fold.unseenBehaviors.isEmpty()) return "Unseen behaviors none"
+    return fold.unseenBehaviors.joinToString(" · ") { it.debugLabel() }
 }
 
 internal fun forecastExampleSummaryLabel(summary: ForecastExampleSummary): String {

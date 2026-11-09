@@ -3,13 +3,12 @@ package com.orbit.wellness.domain.checkin
 import java.time.ZoneId
 
 /**
- * Honest fold inputs for a later learner. Protocol `causal-walk-forward-preparation-v1`.
+ * Honest fold inputs for a later learner. Protocol `causal-walk-forward-preparation-v2`.
  *
- * Each held-out example may learn its feature schema only from earlier examples
- * whose outcome ended strictly before its forecast origin. The origin is the
- * example's anchor time. An ending time equal to that origin is excluded, and
- * an earlier anchor is not enough when the outcome ends at or after the origin.
- * A fold never trains on itself. No coefficient is fit.
+ * A prior qualifies when it is available, has a state input, is not the held-out
+ * example, and either ended before the forecast origin or ended at that origin
+ * as the exact anchor check-in. Another example that merely shares the origin
+ * time stays out. A fold never trains on itself. No coefficient is fit.
  *
  * Membership follows stored event time. Edit and availability timestamps are
  * not recorded, so strict as-known availability stays false.
@@ -19,7 +18,7 @@ import java.time.ZoneId
  * Conditional folds encode that input plus the recorded scenario and stay
  * retrospective. Sleep, wearable, and other physiology inputs are not read.
  */
-const val CAUSAL_WALK_FORWARD_PREPARATION_PROTOCOL = "causal-walk-forward-preparation-v1"
+const val CAUSAL_WALK_FORWARD_PREPARATION_PROTOCOL = "causal-walk-forward-preparation-v2"
 
 enum class CausalPreparationKind {
     STATE,
@@ -27,7 +26,7 @@ enum class CausalPreparationKind {
 }
 
 enum class CausalCutoff {
-    ENDING_STRICTLY_BEFORE_ORIGIN,
+    ENDING_BEFORE_ORIGIN_OR_EXACT_ANCHOR,
 }
 
 enum class CausalFoldGap {
@@ -41,6 +40,22 @@ enum class CausalPreparedRole {
     CONFLICTING,
     UNAVAILABLE,
     UNKNOWN,
+}
+
+/**
+ * An unseen behavior behind an activated kind column. Audit only.
+ * It is not a feature and does not change the fitted schema.
+ */
+data class CausalUnseenBehavior(
+    val kind: BehaviorKind,
+    val key: String,
+    val intent: String?,
+    val displayName: String,
+) {
+    fun debugLabel(): String {
+        val intentLabel = intent?.let { " · $it" }.orEmpty()
+        return "${kind.name}: $displayName · $key$intentLabel"
+    }
 }
 
 data class CausalAxisSupervision(
@@ -115,6 +130,7 @@ data class CausalWalkForwardFold(
     val targets: CausalAxisTargetEncoding,
     val axisSupport: List<CausalAxisSupervision>,
     val oovActivations: List<String>,
+    val unseenBehaviors: List<CausalUnseenBehavior>,
     val provenance: ScenarioProvenance?,
     val retrospective: Boolean,
     val availabilityMode: ObservationAvailabilityMode,
@@ -124,7 +140,7 @@ data class CausalWalkForwardFold(
     val suitableForRecommendation: Boolean,
 ) {
     init {
-        require(cutoff == CausalCutoff.ENDING_STRICTLY_BEFORE_ORIGIN)
+        require(cutoff == CausalCutoff.ENDING_BEFORE_ORIGIN_OR_EXACT_ANCHOR)
         require(forecastOrigin == identity.anchorAt)
         require(availabilityMode == ObservationAvailabilityMode.EVENT_TIME_RECONSTRUCTION)
         require(!strictAsKnownAvailability)
@@ -147,7 +163,7 @@ data class CausalWalkForwardFold(
 
 data class CausalWalkForwardPreparation(
     val protocol: String = CAUSAL_WALK_FORWARD_PREPARATION_PROTOCOL,
-    val cutoff: CausalCutoff = CausalCutoff.ENDING_STRICTLY_BEFORE_ORIGIN,
+    val cutoff: CausalCutoff = CausalCutoff.ENDING_BEFORE_ORIGIN_OR_EXACT_ANCHOR,
     val availabilityMode: ObservationAvailabilityMode = ObservationAvailabilityMode.EVENT_TIME_RECONSTRUCTION,
     val strictAsKnownAvailability: Boolean = false,
     val predictive: Boolean = false,
@@ -158,7 +174,7 @@ data class CausalWalkForwardPreparation(
 ) {
     init {
         require(protocol == CAUSAL_WALK_FORWARD_PREPARATION_PROTOCOL)
-        require(cutoff == CausalCutoff.ENDING_STRICTLY_BEFORE_ORIGIN)
+        require(cutoff == CausalCutoff.ENDING_BEFORE_ORIGIN_OR_EXACT_ANCHOR)
         require(availabilityMode == ObservationAvailabilityMode.EVENT_TIME_RECONSTRUCTION)
         require(!strictAsKnownAvailability)
         require(!predictive && !updatesModel && !suitableForRecommendation)
@@ -205,10 +221,7 @@ fun projectCausalWalkForwardPreparation(
             emptyList()
         } else {
             pairs.filter { prior ->
-                prior.first.identity.transitionId != held.first.identity.transitionId &&
-                    prior.first.available &&
-                    prior.first.input != null &&
-                    prior.first.identity.endingAt < origin
+                priorQualifies(prior.first, held.first.identity)
             }
         }
         val priorIds = priors.map { it.first.identity.transitionId }.sorted()
@@ -245,6 +258,7 @@ fun projectCausalWalkForwardPreparation(
             prepared = statePrepared,
             targets = targets,
             support = support,
+            unseenBehaviors = emptyList(),
             provenance = null,
             retrospective = false,
         )
@@ -257,6 +271,7 @@ fun projectCausalWalkForwardPreparation(
             prepared = conditionalPrepared,
             targets = targets,
             support = support,
+            unseenBehaviors = unseenBehaviors(held.second.scenario, conditionalPrepared),
             provenance = ScenarioProvenance.RECORDED_REALIZED,
             retrospective = true,
         )
@@ -308,7 +323,7 @@ private fun prepareFoldInput(
     origin: Long,
     conditional: Boolean,
 ): CausalPreparedInput {
-    val cutoff = "ending-strictly-before-$origin"
+    val cutoff = "ending-before-origin-or-exact-anchor-$origin"
     val heldInput = checkNotNull(held.first.input)
     val encoded = if (conditional) {
         val rows = priors.map { prior ->
@@ -340,13 +355,14 @@ private fun fold(
     prepared: CausalPreparedInput?,
     targets: CausalAxisTargetEncoding,
     support: List<CausalAxisSupervision>,
+    unseenBehaviors: List<CausalUnseenBehavior>,
     provenance: ScenarioProvenance?,
     retrospective: Boolean,
 ): CausalWalkForwardFold {
     return CausalWalkForwardFold(
         identity = identity,
         kind = kind,
-        cutoff = CausalCutoff.ENDING_STRICTLY_BEFORE_ORIGIN,
+        cutoff = CausalCutoff.ENDING_BEFORE_ORIGIN_OR_EXACT_ANCHOR,
         forecastOrigin = origin,
         qualifyingPriorInputIds = priorIds,
         gap = gap,
@@ -355,6 +371,7 @@ private fun fold(
         targets = targets,
         axisSupport = support,
         oovActivations = prepared?.let(::oovActivations).orEmpty(),
+        unseenBehaviors = unseenBehaviors,
         provenance = provenance,
         retrospective = retrospective,
         availabilityMode = ObservationAvailabilityMode.EVENT_TIME_RECONSTRUCTION,
@@ -363,6 +380,43 @@ private fun fold(
         updatesModel = false,
         suitableForRecommendation = false,
     )
+}
+
+private fun priorQualifies(prior: StateForecastExample, held: ExampleIdentity): Boolean {
+    val origin = held.anchorAt ?: return false
+    if (prior.identity.transitionId == held.transitionId) return false
+    if (!prior.available || prior.input == null) return false
+    if (prior.identity.endingAt < origin) return true
+    return prior.identity.endingAt == origin && prior.identity.endingKey == held.anchorKey
+}
+
+private fun unseenBehaviors(
+    scenario: TransitionScenario,
+    prepared: CausalPreparedInput?,
+): List<CausalUnseenBehavior> {
+    if (prepared == null) return emptyList()
+    val activated = prepared.schema.features.mapIndexedNotNull { index, feature ->
+        val identity = feature.identity as? CausalFeatureIdentity.BehaviorOov ?: return@mapIndexedNotNull null
+        val value = prepared.columns.single { it.baseIndex == index && it.role == CausalPreparedRole.VALUE }
+        if (prepared.statuses[index] == CausalFeatureStatus.OBSERVED && value.value == 1.0) identity.kind else null
+    }.toSet()
+    val known = prepared.schema.features.mapNotNull { feature ->
+        (feature.identity as? CausalFeatureIdentity.BehaviorPresent)?.identity
+    }.toSet()
+    return scenario.exposures.mapNotNull { exposure ->
+        val identity = exposure.identity
+        if (identity.kind !in activated || identity in known) return@mapNotNull null
+        CausalUnseenBehavior(
+            kind = identity.kind,
+            key = identity.key,
+            intent = identity.intent,
+            displayName = when (exposure) {
+                is ReportedBehavior -> exposure.displayName
+                is WorkoutBehavior -> exposure.displayName
+                is UsageBehavior -> exposure.displayNames.joinToString(", ")
+            },
+        )
+    }.distinct().sortedWith(compareBy({ it.kind.ordinal }, { it.key }, { it.intent ?: "" }, { it.displayName }))
 }
 
 private fun oovActivations(prepared: CausalPreparedInput): List<String> {

@@ -44,8 +44,12 @@ class CausalWalkForwardPreparationTest {
         assertEquals(origin, endingEqual.identity.endingAt)
         assertTrue(checkNotNull(earlierAnchor.identity.anchorAt) < origin)
         assertTrue(earlierAnchor.identity.endingAt < origin)
-        assertEquals(listOf(earlierAnchor.identity.transitionId), earlier.qualifyingPriorInputIds)
-        assertFalse(endingEqual.identity.transitionId in earlier.qualifyingPriorInputIds)
+        assertEquals(
+            listOf(earlierAnchor.identity.transitionId, endingEqual.identity.transitionId).sorted(),
+            earlier.qualifyingPriorInputIds,
+        )
+        assertTrue(endingEqual.identity.transitionId in earlier.qualifyingPriorInputIds)
+        assertEquals(endingEqual.identity.endingKey, earlier.identity.anchorKey)
         val overlapped = prepare(bundle) { current ->
             if (current.transitionId == earlierAnchor.identity.transitionId) {
                 current.copy(endingAt = origin + 1)
@@ -54,9 +58,9 @@ class CausalWalkForwardPreparationTest {
             }
         }
         val moved = overlapped.stateFolds.single { it.identity.endingKey.raw == "d" }
-        assertEquals(CausalFoldGap.NO_PRIOR_INPUT, moved.gap)
+        assertNull(moved.gap)
+        assertEquals(listOf(endingEqual.identity.transitionId), moved.qualifyingPriorInputIds)
         assertFalse(earlierAnchor.identity.transitionId in moved.qualifyingPriorInputIds)
-        assertNull(moved.schema)
         val later = prepare(bundle, moodOn = "e" to 9)
         assertEquals(
             original.stateFolds.filter { it.identity.endingKey.raw != "e" },
@@ -77,8 +81,8 @@ class CausalWalkForwardPreparationTest {
         val after = missing.stateFolds.single { it.identity.endingKey.raw == "d" }
         assertEquals(before.schema, after.schema)
         assertEquals(before.prepared, after.prepared)
-        assertEquals(1, before.axisSupport.single { it.axisId == DefaultCheckInAxes.MOOD }.observedTargetCount)
-        assertEquals(0, after.axisSupport.single { it.axisId == DefaultCheckInAxes.MOOD }.observedTargetCount)
+        assertEquals(2, before.axisSupport.single { it.axisId == DefaultCheckInAxes.MOOD }.observedTargetCount)
+        assertEquals(1, after.axisSupport.single { it.axisId == DefaultCheckInAxes.MOOD }.observedTargetCount)
         assertEquals(
             before.axisSupport.filter { it.axisId != DefaultCheckInAxes.MOOD },
             after.axisSupport.filter { it.axisId != DefaultCheckInAxes.MOOD },
@@ -139,6 +143,101 @@ class CausalWalkForwardPreparationTest {
     }
 
     @Test
+    fun exactAnchorStateIsAdmittedAndOtherEqualTimesStayOut() {
+        val bundle = bundle()
+        val original = prepare(bundle)
+        val first = original.stateFolds.single { it.identity.endingKey.raw == "b" }
+        val second = original.stateFolds.single { it.identity.endingKey.raw == "c" }
+        val predecessor = bundle.stateForecasts.examples.single { it.identity.endingKey.raw == "b" }
+        assertEquals(CausalFoldGap.NO_PRIOR_INPUT, first.gap)
+        assertEquals(listOf(predecessor.identity.transitionId), second.qualifyingPriorInputIds)
+        assertEquals(predecessor.identity.endingAt, second.forecastOrigin)
+        assertEquals(predecessor.identity.endingKey, second.identity.anchorKey)
+        val held = bundle.stateForecasts.examples.single { it.identity.endingKey.raw == "d" }
+        val donor = bundle.conditionalTransitions.examples.single { it.identity.endingKey.raw == "b" }
+        val origin = checkNotNull(held.identity.anchorAt)
+        val unrelatedIdentity = donor.identity.copy(
+            transitionId = "other",
+            endingAt = origin,
+            endingKey = StateOccurrenceKey("not-the-anchor"),
+        )
+        val withOther = projectCausalWalkForwardPreparation(
+            bundle.stateForecasts.examples + predecessor.copy(identity = unrelatedIdentity),
+            bundle.conditionalTransitions.examples + donor.copy(
+                identity = unrelatedIdentity,
+                scenario = donor.scenario.copy(transitionKey = TransitionOccurrenceKey("other")),
+            ),
+            zone,
+        )
+        val fold = withOther.stateFolds.single { it.identity.endingKey.raw == "d" }
+        assertTrue(fold.qualifyingPriorInputIds.contains("c"))
+        assertFalse(fold.qualifyingPriorInputIds.contains("other"))
+        assertFalse(fold.qualifyingPriorInputIds.contains(fold.identity.transitionId))
+        val self = prepare(bundle) { current ->
+            if (current.transitionId == "c") {
+                current.copy(endingAt = checkNotNull(current.anchorAt), endingKey = checkNotNull(current.anchorKey))
+            } else {
+                current
+            }
+        }
+        val selfFold = self.stateFolds.single { it.identity.transitionId == "c" }
+        assertFalse(selfFold.qualifyingPriorInputIds.contains("c"))
+        assertTrue(selfFold.qualifyingPriorInputIds.contains("b"))
+        assertEquals(
+            original,
+            projectCausalWalkForwardPreparation(
+                bundle.stateForecasts.examples.reversed(),
+                bundle.conditionalTransitions.examples.reversed(),
+                zone,
+            ),
+        )
+        val future = prepare(bundle, moodOn = "e" to 8)
+        val before = original.stateFolds.single { it.identity.endingKey.raw == "d" }
+        val after = future.stateFolds.single { it.identity.endingKey.raw == "d" }
+        assertFalse(before.qualifyingPriorInputIds.contains("e"))
+        assertEquals(before.schema, after.schema)
+        assertEquals(before.prepared, after.prepared)
+        val heldBefore = original.stateFolds.single { it.identity.endingKey.raw == "e" }
+        val heldAfter = future.stateFolds.single { it.identity.endingKey.raw == "e" }
+        assertEquals(heldBefore.schema, heldAfter.schema)
+        assertEquals(heldBefore.prepared, heldAfter.prepared)
+        assertNotEquals(heldBefore.targets, heldAfter.targets)
+    }
+
+    @Test
+    fun unseenBehaviorAuditNamesTheIdentityWithoutChangingTheSchema() {
+        val food = ReportedBehavior(behaviorIdentity(BehaviorKind.FOOD, null, "Greek tacos"), "Greek tacos")
+        val meal = ReportedBehavior(behaviorIdentity(BehaviorKind.MEAL_SIZE, null, "Greek tacos"), "Greek tacos")
+        val bundle = bundle()
+        val baseline = prepare(bundle).conditionalFolds.single { it.identity.endingKey.raw == "e" }
+        val examples = bundle.conditionalTransitions.examples.map { example ->
+            if (example.identity.endingKey.raw != "e") {
+                example
+            } else {
+                example.copy(
+                    scenario = example.scenario.copy(
+                        diet = CategoryKnowledge.REVIEWED_ENTRIES,
+                        exposures = listOf(food, meal),
+                    ),
+                )
+            }
+        }
+        val fold = projectCausalWalkForwardPreparation(bundle.stateForecasts.examples, examples, zone)
+            .conditionalFolds.single { it.identity.endingKey.raw == "e" }
+        assertEquals(baseline.schema, fold.schema)
+        assertEquals(listOf("food", "meal_size"), fold.oovActivations)
+        assertEquals(
+            listOf(
+                "FOOD: Greek tacos · ${food.identity.key}",
+                "MEAL_SIZE: Greek tacos · ${meal.identity.key}",
+            ),
+            fold.unseenBehaviors.map { it.debugLabel() },
+        )
+        assertEquals(food.identity.key, meal.identity.key)
+        assertNotEquals(fold.unseenBehaviors[0].kind, fold.unseenBehaviors[1].kind)
+    }
+
+    @Test
     fun reversedExamplesAndFirstWorkoutKindStayStable() {
         val bundle = bundle()
         val forward = prepare(bundle)
@@ -157,7 +256,7 @@ class CausalWalkForwardPreparationTest {
         assertTrue(first.forecastOrigin != null)
         val ready = forward.stateFolds.single { it.identity.endingKey.raw == "d" }
         assertNull(ready.gap)
-        assertEquals(1, ready.qualifyingPriorInputIds.size)
+        assertEquals(2, ready.qualifyingPriorInputIds.size)
         assertEquals(ready.schema!!.features.size * CausalPreparedRole.entries.size, ready.prepared!!.columns.size)
         assertFalse(ready.retrospective)
         assertNull(ready.provenance)
@@ -187,13 +286,20 @@ class CausalWalkForwardPreparationTest {
         val fold = prepared.conditionalFolds.single { it.identity.endingKey.raw == "e" }
         assertTrue(fold.schema!!.features.any { it.identity == CausalFeatureIdentity.BehaviorOov(BehaviorKind.WORKOUT) })
         assertEquals(listOf("workout"), fold.oovActivations)
+        assertEquals(
+            listOf(CausalUnseenBehavior(BehaviorKind.WORKOUT, workout.identity.key, null, "Run")),
+            fold.unseenBehaviors,
+        )
+        assertEquals(fold.schema, prepare(bundle).conditionalFolds.single { it.identity.endingKey.raw == "e" }.schema)
         assertFalse(prepared.stateFolds.single { it.identity.endingKey.raw == "e" }.oovActivations.contains("workout"))
         val lab = source(
             "src/main/java/com/orbit/wellness/ui/insights/PredictionLabSection.kt",
             "app/src/main/java/com/orbit/wellness/ui/insights/PredictionLabSection.kt",
         ).readText()
         assertTrue(lab.contains("Causal preparation"))
+        assertTrue(lab.contains("exact anchor state"))
         assertTrue(lab.contains("Event-time reconstruction"))
+        assertTrue(lab.contains("Unseen behaviors none"))
         listOf("Activity", "Workout", "Diet", "Usage", "Wearable", "recommend", "Slider", "Dao", ".insert").forEach { token ->
             assertFalse(token, lab.contains(token))
         }
