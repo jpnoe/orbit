@@ -30,6 +30,10 @@ import com.orbit.wellness.domain.checkin.ForecastEvidence
 import com.orbit.wellness.domain.checkin.ForecastExampleBundle
 import com.orbit.wellness.domain.checkin.ForecastExampleSummary
 import com.orbit.wellness.domain.checkin.CausalPredecessorNeighborhoodDataset
+import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDataset
+import com.orbit.wellness.domain.checkin.successorCompactLabel
+import com.orbit.wellness.domain.checkin.successorMissingLabel
+import com.orbit.wellness.domain.checkin.successorTechnicalLabel
 import com.orbit.wellness.domain.checkin.nullTrajectoryGapLabel
 import com.orbit.wellness.domain.checkin.predecessorCompactLabel
 import com.orbit.wellness.domain.checkin.predecessorContextAxisLabel
@@ -108,6 +112,7 @@ fun PredictionResearchPane(walkForwardViewModel: WalkForwardViewModel) {
         is WalkForwardUiState.Ready -> PredictionLab(
             bundle = state.examples,
             neighborhoods = state.neighborhoods,
+            successorNeighborhoods = state.successorNeighborhoods,
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -117,6 +122,7 @@ fun PredictionResearchPane(walkForwardViewModel: WalkForwardViewModel) {
 private fun PredictionLab(
     bundle: ForecastExampleBundle,
     neighborhoods: CausalPredecessorNeighborhoodDataset,
+    successorNeighborhoods: RetrospectiveSuccessorNeighborhoodDataset,
     modifier: Modifier = Modifier,
 ) {
     val projection = bundle.walkForward
@@ -138,7 +144,7 @@ private fun PredictionLab(
             )
         }
         when (mode) {
-            PredictionLabMode.REPLAY -> RecordedReplayPane(bundle, neighborhoods)
+            PredictionLabMode.REPLAY -> RecordedReplayPane(bundle, neighborhoods, successorNeighborhoods)
             PredictionLabMode.SANDBOX -> PredictionSandboxPane(
                 projection.anchors,
                 projection.stateSide,
@@ -152,6 +158,7 @@ private fun PredictionLab(
 private fun RecordedReplayPane(
     bundle: ForecastExampleBundle,
     neighborhoods: CausalPredecessorNeighborhoodDataset,
+    successorNeighborhoods: RetrospectiveSuccessorNeighborhoodDataset,
 ) {
     val projection = bundle.walkForward
     val observationProcess = bundle.observationProcess
@@ -178,6 +185,7 @@ private fun RecordedReplayPane(
             NullTrajectorySection(bundle, attempt.transitionId)
             CausalPredecessorSection(neighborhoods, attempt.anchorKey)
             PredecessorContextSection(bundle, neighborhoods, attempt.transitionId)
+            RetrospectiveSuccessorSection(successorNeighborhoods, attempt.transitionId)
             val anchorKey = attempt.anchorKey
             AttemptForecasts(
                 attempt = attempt,
@@ -662,6 +670,29 @@ private fun NullTrajectorySection(
     evaluation.commonSupport.forEach { support ->
         Text("${axisLabel(support.axisId)} ${nullTrajectorySupportLabel(support)}")
     }
+}
+
+@Composable
+private fun RetrospectiveSuccessorSection(
+    successors: RetrospectiveSuccessorNeighborhoodDataset,
+    transitionId: String,
+) {
+    var open by remember(transitionId) { mutableStateOf(false) }
+    TextButton(onClick = { open = !open }) {
+        Text("Retrospective successor neighborhood")
+    }
+    if (!open) return
+    val neighborhood = successors.neighborhoods.singleOrNull { it.transitionId == transitionId }
+    if (neighborhood == null) {
+        Text(successorMissingLabel())
+        return
+    }
+    Text(successorCompactLabel(neighborhood))
+    var technical by remember(transitionId) { mutableStateOf(false) }
+    TextButton(onClick = { technical = !technical }) {
+        Text("Technical details")
+    }
+    if (technical) Text(successorTechnicalLabel(neighborhood))
 }
 
 @Composable
