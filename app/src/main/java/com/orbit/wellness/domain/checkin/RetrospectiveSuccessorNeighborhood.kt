@@ -12,7 +12,10 @@ import com.orbit.wellness.data.local.CheckInContextStartBasis
  * depths follow the unique graph outgoing edge. A wake or day-start that is
  * not graph-linked stays out of that path and can still appear in a sampled
  * window. The result contains future behavior and outcomes. It is not a
- * forecast input.
+ * forecast input. End of recorded history means the last adopted successor
+ * reaches the observable cutoff. No outgoing edge while a later check-in
+ * exists is no graph-linked successor, and it is disconnected at a boundary
+ * when a later wake or day-start interval is stored.
  *
  * The observable cutoff is the latest stored check-in `recordedAt` in the
  * reconstruction. It is not wall-clock now. Each future window ends at the
@@ -42,11 +45,16 @@ const val RETROSPECTIVE_SUCCESSOR_NEIGHBORHOOD_ASSUMPTIONS =
         "Depth 1 is the selected recorded transition. Later depths follow one graph outgoing edge. " +
         "A wake or day-start that is not graph-linked is not adopted as that edge. " +
         "Equal-timestamp candidates stay in occurrence-identity order, which is not a temporal order. " +
-        "Nothing recorded later is the end of recorded history, not reviewed absence. " +
+        "End of recorded history means the last adopted successor reaches the observable cutoff. " +
+        "No outgoing edge while a later check-in exists is no graph-linked successor. " +
+        "That stop is disconnected at a boundary only when a later wake or day-start interval is stored. " +
+        "Reviewed absence stays a property of a recorded interval. " +
         "Deferred and not implemented: bidirectional-smoothed-state and a past-only successor-cluster model."
 
 enum class SuccessorStopReason {
     END_OF_RECORDED_HISTORY,
+    NO_GRAPH_LINKED_SUCCESSOR,
+    DISCONNECTED_AT_BOUNDARY,
     AMBIGUOUS_SUCCESSOR,
     UNRESOLVED,
     INVALID_CHRONOLOGY,
@@ -254,7 +262,7 @@ private fun projectOne(
             row.endAt == node.interval.windowEndAt &&
             row.durationMillis == node.interval.durationMillis
     }
-    val (hops, stop) = orderedPath(node, selected, graph, statesById, evidence)
+    val (hops, stop) = orderedPath(node, selected, graph, statesById, evidence, cutoff)
     val focal = hops.first().source
     val anchorAt = focal?.recordedAt ?: selected.startAt
     val windows = SuccessorWindowScale.entries.map { scale ->
@@ -289,6 +297,7 @@ private fun orderedPath(
     graph: AlternatingTemporalGraph,
     statesById: Map<String, StateOccurrenceNode>,
     evidence: List<IntervalBehaviorEvidence>,
+    cutoff: Long?,
 ): Pair<List<SuccessorHop>, SuccessorStop> {
     val focalNode = selected.startStateKey?.raw?.let { statesById[it] }
     val focal = focalNode?.let { stateView(it.state) }
@@ -326,7 +335,7 @@ private fun orderedPath(
             .filter { it.startStateId == leaving.id }
             .sortedBy { it.id }
         if (outgoing.isEmpty()) {
-            return hops to stop(SuccessorStopReason.END_OF_RECORDED_HISTORY, hops.size)
+            return hops to stop(noOutgoingReason(leaving, evidence, cutoff), hops.size)
         }
         if (outgoing.size > 1) {
             return hops to stop(
@@ -372,6 +381,25 @@ private fun orderedPath(
         visitedTransitions += node.id
         visitedStates += next.id
         cursor = next
+    }
+}
+
+private fun noOutgoingReason(
+    terminal: StateOccurrenceNode,
+    evidence: List<IntervalBehaviorEvidence>,
+    cutoff: Long?,
+): SuccessorStopReason {
+    val terminalAt = terminal.state.recordedAt
+    if (cutoff == null || terminalAt >= cutoff) return SuccessorStopReason.END_OF_RECORDED_HISTORY
+    val boundaryIsStoredLater = evidence.any { row ->
+        val boundary = row.startBasis == CheckInContextStartBasis.WAKE_TIME ||
+            row.startBasis == CheckInContextStartBasis.DAY_START
+        boundary && row.endAt > terminalAt
+    }
+    return if (boundaryIsStoredLater) {
+        SuccessorStopReason.DISCONNECTED_AT_BOUNDARY
+    } else {
+        SuccessorStopReason.NO_GRAPH_LINKED_SUCCESSOR
     }
 }
 
@@ -558,10 +586,13 @@ fun successorCompactLabel(neighborhood: RetrospectiveSuccessorNeighborhood): Str
         val raw = axis.raw?.toString() ?: "none"
         "${axis.axisId} ${axis.status.name} $raw"
     } ?: "ending state not adopted"
-    val history = if (neighborhood.stop.reason == SuccessorStopReason.END_OF_RECORDED_HISTORY) {
-        "Nothing recorded later is the end of recorded history, not reviewed absence."
-    } else {
-        "stop ${neighborhood.stop.reason.name}"
+    val history = when (neighborhood.stop.reason) {
+        SuccessorStopReason.END_OF_RECORDED_HISTORY ->
+            "Nothing recorded later is the end of recorded history, not reviewed absence."
+        SuccessorStopReason.NO_GRAPH_LINKED_SUCCESSOR,
+        SuccessorStopReason.DISCONNECTED_AT_BOUNDARY,
+        -> "No graph-linked successor. Later sampled records exist. ${neighborhood.stop.reason.name}"
+        else -> "stop ${neighborhood.stop.reason.name}"
     }
     val windows = neighborhood.windows.joinToString("\n") { window ->
         val choices = if (window.choicesAreObservedZero) {

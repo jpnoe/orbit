@@ -147,10 +147,37 @@ class RetrospectiveSuccessorNeighborhoodTest {
         )
         val neighborhood = project(data).neighborhood("mid")
         assertEquals(listOf("mid"), neighborhood.hops.map { it.transition.key.raw })
-        assertEquals(SuccessorStopReason.END_OF_RECORDED_HISTORY, neighborhood.stop.reason)
+        assertEquals(SuccessorStopReason.DISCONNECTED_AT_BOUNDARY, neighborhood.stop.reason)
+        assertTrue(neighborhood.observableCutoffAt!! > checkNotNull(neighborhood.hops.last().successor).recordedAt)
+        val compact = successorCompactLabel(neighborhood)
+        assertTrue(compact.contains("No graph-linked successor. Later sampled records exist."))
+        assertFalse(compact.contains("Nothing recorded later"))
         val sixHours = neighborhood.windows.single { it.scale == SuccessorWindowScale.FOLLOWING_6_HOURS }
         assertEquals(listOf("day", "mid", "woken"), sixHours.choices.intervals.map { it.key.raw }.sorted())
         assertTrue(sixHours.outcomes.intervals.map { it.key.raw }.containsAll(listOf("woken", "day")))
+    }
+
+    @Test
+    fun aLaterUnlinkedRecordIsNotTheEndOfRecordedHistory() {
+        val start = 35L * DAY
+        val neighborhood = project(
+            dataset(
+                states = listOf(
+                    state("origin", start, mood = 1),
+                    state("end", start + HOUR, mood = 2),
+                    state("side", start + 2 * HOUR, mood = 3),
+                    state("later", start + 3 * HOUR, mood = 4),
+                ),
+                intervals = listOf(
+                    linked("end", "origin", start, start + HOUR),
+                    linked("later", "side", start + 2 * HOUR, start + 3 * HOUR),
+                ),
+            ),
+        ).neighborhood("end")
+        assertEquals(listOf("end"), neighborhood.hops.map { it.transition.key.raw })
+        assertEquals(SuccessorStopReason.NO_GRAPH_LINKED_SUCCESSOR, neighborhood.stop.reason)
+        assertTrue(successorCompactLabel(neighborhood).contains("No graph-linked successor. Later sampled records exist."))
+        assertFalse(successorCompactLabel(neighborhood).contains("Nothing recorded later"))
     }
 
     @Test
