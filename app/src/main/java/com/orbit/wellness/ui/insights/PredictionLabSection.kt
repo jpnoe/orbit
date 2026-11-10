@@ -32,8 +32,14 @@ import com.orbit.wellness.domain.checkin.ForecastExampleSummary
 import com.orbit.wellness.domain.checkin.CausalPredecessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.nullTrajectoryGapLabel
 import com.orbit.wellness.domain.checkin.predecessorCompactLabel
+import com.orbit.wellness.domain.checkin.predecessorContextAxisLabel
+import com.orbit.wellness.domain.checkin.predecessorContextSupportLabel
+import com.orbit.wellness.domain.checkin.predecessorContextTechnicalLabel
+import com.orbit.wellness.domain.checkin.predecessorFeatureCompactLabel
+import com.orbit.wellness.domain.checkin.predecessorFeatureMissingLabel
 import com.orbit.wellness.domain.checkin.predecessorMissingLabel
 import com.orbit.wellness.domain.checkin.predecessorTechnicalLabel
+import com.orbit.wellness.domain.checkin.projectPredecessorContextLearner
 import com.orbit.wellness.domain.checkin.nullTrajectoryAxisLabel
 import com.orbit.wellness.domain.checkin.nullTrajectorySupportLabel
 import com.orbit.wellness.domain.checkin.nullTrajectoryTechnicalLabel
@@ -171,6 +177,7 @@ private fun RecordedReplayPane(
             CausalPreparationSection(bundle, attempt.transitionId)
             NullTrajectorySection(bundle, attempt.transitionId)
             CausalPredecessorSection(neighborhoods, attempt.anchorKey)
+            PredecessorContextSection(bundle, neighborhoods, attempt.transitionId)
             val anchorKey = attempt.anchorKey
             AttemptForecasts(
                 attempt = attempt,
@@ -678,6 +685,50 @@ private fun CausalPredecessorSection(
         Text("Technical details")
     }
     if (technical) Text(predecessorTechnicalLabel(neighborhood))
+}
+
+@Composable
+private fun PredecessorContextSection(
+    bundle: ForecastExampleBundle,
+    neighborhoods: CausalPredecessorNeighborhoodDataset,
+    transitionId: String,
+) {
+    var open by remember(transitionId) { mutableStateOf(false) }
+    TextButton(onClick = { open = !open }) {
+        Text("Predecessor-context learner")
+    }
+    if (!open) return
+    val zone = remember { ZoneId.systemDefault() }
+    val evaluation = remember(bundle, neighborhoods, zone.id) {
+        projectPredecessorContextLearner(
+            bundle.stateForecasts.examples,
+            bundle.conditionalTransitions.examples,
+            neighborhoods,
+            zone,
+        )
+    }
+    val fold = evaluation.folds.singleOrNull { it.identity.transitionId == transitionId }
+    if (fold == null) {
+        Text(predecessorFeatureMissingLabel())
+        return
+    }
+    val view = fold.featureView
+    if (view == null) Text(predecessorFeatureMissingLabel()) else Text(predecessorFeatureCompactLabel(view))
+    fold.axes.forEach { axis ->
+        Text("${axisLabel(axis.axisId)} ${predecessorContextAxisLabel(axis)}")
+    }
+    evaluation.commonSupport.forEach { support ->
+        Text("${axisLabel(support.axisId)} ${predecessorContextSupportLabel(support)}")
+    }
+    var technical by remember(transitionId) { mutableStateOf(false) }
+    TextButton(onClick = { technical = !technical }) {
+        Text("Technical details")
+    }
+    if (technical) {
+        fold.axes.forEach { axis ->
+            Text("${axisLabel(axis.axisId)} ${predecessorContextTechnicalLabel(evaluation, axis, view)}")
+        }
+    }
 }
 
 internal fun causalPreparationIntro(): String {
