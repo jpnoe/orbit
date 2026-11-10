@@ -29,7 +29,11 @@ import com.orbit.wellness.domain.checkin.FocalAxisStatus
 import com.orbit.wellness.domain.checkin.ForecastEvidence
 import com.orbit.wellness.domain.checkin.ForecastExampleBundle
 import com.orbit.wellness.domain.checkin.ForecastExampleSummary
+import com.orbit.wellness.domain.checkin.CausalPredecessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.nullTrajectoryGapLabel
+import com.orbit.wellness.domain.checkin.predecessorCompactLabel
+import com.orbit.wellness.domain.checkin.predecessorMissingLabel
+import com.orbit.wellness.domain.checkin.predecessorTechnicalLabel
 import com.orbit.wellness.domain.checkin.nullTrajectoryAxisLabel
 import com.orbit.wellness.domain.checkin.nullTrajectorySupportLabel
 import com.orbit.wellness.domain.checkin.nullTrajectoryTechnicalLabel
@@ -43,6 +47,7 @@ import com.orbit.wellness.domain.checkin.OverflowDirection
 import com.orbit.wellness.domain.checkin.RecentMeanChoice
 import com.orbit.wellness.domain.checkin.SandboxField
 import com.orbit.wellness.domain.checkin.SandboxSession
+import com.orbit.wellness.domain.checkin.StateOccurrenceKey
 import com.orbit.wellness.domain.checkin.StateTrajectoryContext
 import com.orbit.wellness.domain.checkin.TrajectoryContinuity
 import com.orbit.wellness.domain.checkin.TrajectoryExpert
@@ -96,6 +101,7 @@ fun PredictionResearchPane(walkForwardViewModel: WalkForwardViewModel) {
         WalkForwardUiState.Loading -> InlineLoading()
         is WalkForwardUiState.Ready -> PredictionLab(
             bundle = state.examples,
+            neighborhoods = state.neighborhoods,
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -104,6 +110,7 @@ fun PredictionResearchPane(walkForwardViewModel: WalkForwardViewModel) {
 @Composable
 private fun PredictionLab(
     bundle: ForecastExampleBundle,
+    neighborhoods: CausalPredecessorNeighborhoodDataset,
     modifier: Modifier = Modifier,
 ) {
     val projection = bundle.walkForward
@@ -125,7 +132,7 @@ private fun PredictionLab(
             )
         }
         when (mode) {
-            PredictionLabMode.REPLAY -> RecordedReplayPane(bundle)
+            PredictionLabMode.REPLAY -> RecordedReplayPane(bundle, neighborhoods)
             PredictionLabMode.SANDBOX -> PredictionSandboxPane(
                 projection.anchors,
                 projection.stateSide,
@@ -136,7 +143,10 @@ private fun PredictionLab(
 }
 
 @Composable
-private fun RecordedReplayPane(bundle: ForecastExampleBundle) {
+private fun RecordedReplayPane(
+    bundle: ForecastExampleBundle,
+    neighborhoods: CausalPredecessorNeighborhoodDataset,
+) {
     val projection = bundle.walkForward
     val observationProcess = bundle.observationProcess
     val evaluation = projection.evaluation
@@ -160,6 +170,7 @@ private fun RecordedReplayPane(bundle: ForecastExampleBundle) {
             Text("Transition ${attempt.transitionId}. Anchor ${attempt.anchorKey.raw}.")
             CausalPreparationSection(bundle, attempt.transitionId)
             NullTrajectorySection(bundle, attempt.transitionId)
+            CausalPredecessorSection(neighborhoods, attempt.anchorKey)
             val anchorKey = attempt.anchorKey
             AttemptForecasts(
                 attempt = attempt,
@@ -644,6 +655,29 @@ private fun NullTrajectorySection(
     evaluation.commonSupport.forEach { support ->
         Text("${axisLabel(support.axisId)} ${nullTrajectorySupportLabel(support)}")
     }
+}
+
+@Composable
+private fun CausalPredecessorSection(
+    neighborhoods: CausalPredecessorNeighborhoodDataset,
+    anchorKey: StateOccurrenceKey,
+) {
+    var open by remember(anchorKey) { mutableStateOf(false) }
+    TextButton(onClick = { open = !open }) {
+        Text("Causal predecessor neighborhood")
+    }
+    if (!open) return
+    val neighborhood = neighborhoods.neighborhoods.singleOrNull { it.focal.stateKey == anchorKey }
+    if (neighborhood == null) {
+        Text(predecessorMissingLabel())
+        return
+    }
+    Text(predecessorCompactLabel(neighborhood))
+    var technical by remember(anchorKey) { mutableStateOf(false) }
+    TextButton(onClick = { technical = !technical }) {
+        Text("Technical details")
+    }
+    if (technical) Text(predecessorTechnicalLabel(neighborhood))
 }
 
 internal fun causalPreparationIntro(): String {

@@ -1,8 +1,10 @@
 package com.orbit.wellness.ui.insights
 
 import com.orbit.wellness.data.CheckInAnalysisSnapshot
+import com.orbit.wellness.domain.checkin.CausalPredecessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.CheckInAnalysisDatasetV2
 import com.orbit.wellness.domain.checkin.ForecastExampleBundle
+import com.orbit.wellness.domain.checkin.projectCausalPredecessorNeighborhood
 import com.orbit.wellness.domain.checkin.projectForecastExamples
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -11,9 +13,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.mapLatest
+import java.time.ZoneId
 
 data class PredictionLabSnapshot(
     val examples: ForecastExampleBundle,
+    val neighborhoods: CausalPredecessorNeighborhoodDataset,
 ) {
     val walkForward get() = examples.walkForward
     val observationProcess get() = examples.observationProcess
@@ -31,6 +35,7 @@ data class PredictionLabSnapshot(
 fun observeWalkForward(
     snapshots: Flow<CheckInAnalysisSnapshot>,
     computation: CoroutineDispatcher = Dispatchers.Default,
+    zone: ZoneId = ZoneId.systemDefault(),
     project: suspend (CheckInAnalysisDatasetV2) -> ForecastExampleBundle = { dataset ->
         projectForecastExamples(dataset)
     },
@@ -38,7 +43,10 @@ fun observeWalkForward(
     return snapshots
         .distinctUntilChanged()
         .mapLatest { snapshot ->
-            PredictionLabSnapshot(examples = project(snapshot.dataset))
+            PredictionLabSnapshot(
+                examples = project(snapshot.dataset),
+                neighborhoods = projectCausalPredecessorNeighborhood(snapshot.dataset, zone),
+            )
         }
         .flowOn(computation)
 }
