@@ -19,6 +19,8 @@ import com.orbit.wellness.data.local.CheckInRecord
 import com.orbit.wellness.data.local.DefaultCheckInAxes
 import com.orbit.wellness.data.local.MoodSample
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import com.orbit.wellness.ui.context.PendingCheckInSession
 import com.orbit.wellness.data.local.EmotionOption
 import com.orbit.wellness.util.DateUtils
@@ -28,9 +30,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.time.ZoneId
 import kotlin.math.round
 
 data class CheckInUiState(
@@ -79,6 +85,7 @@ private fun defaultWakeTimeMillis(): Long {
     return DateUtils.atTimeMillis(LocalDate.now(), 7, 0)
 }
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class CheckInViewModel(
     private val moodRepository: MoodRepository,
     private val checkInRepository: CheckInRepository,
@@ -106,6 +113,8 @@ class CheckInViewModel(
 
     private var appliedSleepPrefill = false
     private var sleepTimesTouchedByUser = false
+    private val sleepDay = MutableStateFlow(LocalDate.now())
+    private var displayedSleepDay = LocalDate.now()
     private var savedCheckInId: String? = null
     private var savedMoodSampleId: String? = null
     private var pending: PendingCheckInSession? = null
@@ -176,7 +185,17 @@ class CheckInViewModel(
             }
         }
         viewModelScope.launch {
-            sleepRepository.observeToday().collect { sleep ->
+            while (isActive) {
+                delay(millisUntilNextLocalDay())
+                noteSleepDay(LocalDate.now())
+            }
+        }
+        viewModelScope.launch {
+            sleepDay.flatMapLatest { date ->
+                sleepRepository.observeForDate(date).map { sleep -> date to sleep }
+            }.collect { (date, sleep) ->
+                val dayChanged = date != displayedSleepDay
+                displayedSleepDay = date
                 if (sleep != null) {
                     appliedSleepPrefill = true
                     _uiState.update {
@@ -189,6 +208,20 @@ class CheckInViewModel(
                             sleepPrefillFromHealthConnect = false,
                         )
                     }
+                } else if (dayChanged) {
+                    appliedSleepPrefill = false
+                    sleepTimesTouchedByUser = false
+                    _uiState.update {
+                        it.copy(
+                            hasLoggedSleepToday = false,
+                            sleepLoaded = true,
+                            bedtimeMillis = defaultBedtimeMillis(),
+                            wakeTimeMillis = defaultWakeTimeMillis(),
+                            sleepQuality = 5f,
+                            sleepPrefillFromHealthConnect = false,
+                        )
+                    }
+                    maybePrefillSleepFromHealthConnect()
                 } else {
                     _uiState.update {
                         it.copy(
@@ -200,6 +233,17 @@ class CheckInViewModel(
                 }
             }
         }
+    }
+
+    private fun noteSleepDay(today: LocalDate) {
+        if (sleepDay.value == today) return
+        sleepDay.value = today
+    }
+
+    private fun millisUntilNextLocalDay(): Long {
+        val zone = ZoneId.systemDefault()
+        val nextMidnight = LocalDate.now(zone).plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        return (nextMidnight - System.currentTimeMillis()).coerceAtLeast(1L)
     }
 
     private suspend fun maybePrefillSleepFromHealthConnect() {
@@ -267,6 +311,7 @@ class CheckInViewModel(
     /** Move the mood visual anchor. Does not mark mood as set. */
     fun syncFromCommitted() {
         _uiState.update { it.copy(moodAnchor = currentMoodStore.committedMood.value) }
+        noteSleepDay(LocalDate.now())
     }
 
     fun onAxisChanged(axisId: String, score: Float) {
@@ -357,10 +402,16 @@ class CheckInViewModel(
 
         viewModelScope.launch {
             _uiState.update { it.copy(isSavingSleep = true) }
+            val day = sleepDay.value
             sleepRepository.logSleep(
                 bedtime = current.bedtimeMillis,
                 wakeTime = current.wakeTimeMillis,
                 sleepQuality = current.sleepQuality.roundToInt().coerceIn(0, 10),
+                localDate = day,
+            )
+            checkInRepository.applyReportedWake(
+                localDate = DateUtils.formatLocalDate(day),
+                wakeTimeAt = current.wakeTimeMillis,
             )
             _uiState.update {
                 it.copy(

@@ -9,8 +9,8 @@ import java.time.LocalDate
 class SleepRepository(
     private val dao: SleepEventDao,
 ) {
-    fun observeToday(): Flow<SleepEvent?> {
-        return dao.observeForDate(DateUtils.formatLocalDate(LocalDate.now()))
+    fun observeForDate(localDate: LocalDate): Flow<SleepEvent?> {
+        return dao.observeForDate(DateUtils.formatLocalDate(localDate))
     }
 
     fun observeBetween(startDate: String, endDate: String): Flow<List<SleepEvent>> {

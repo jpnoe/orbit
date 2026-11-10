@@ -8,6 +8,7 @@ import com.orbit.wellness.data.local.CheckInContextCategory
 import com.orbit.wellness.data.local.CheckInContextStatus
 import com.orbit.wellness.data.local.CheckInMeal
 import com.orbit.wellness.data.local.CheckInMealFoodItem
+import com.orbit.wellness.data.local.CheckInContextStartBasis
 import com.orbit.wellness.data.local.CheckInContextWindow
 import com.orbit.wellness.util.DateUtils
 import com.orbit.wellness.data.local.CheckInUsageItem
@@ -205,6 +206,27 @@ class CheckInRepository(
                 )
             },
             wakeTimeAt = wakeTimes.wakeTimeFor(localDate),
+        )
+    }
+
+    /**
+     * Moves the day's first check-in onto a wake time reported after that check-in was saved.
+     * Only a start that is still local midnight counts. An edited start, a previous-check-in
+     * boundary, and a check-in recorded before the wake stay as they are.
+     */
+    suspend fun applyReportedWake(localDate: String, wakeTimeAt: Long) {
+        val first = dao.getCheckInsOnDate(localDate)
+            .minWithOrNull(compareBy<CheckInRecord> { it.recordedAt }.thenBy { it.id })
+            ?: return
+        if (wakeTimeAt > first.recordedAt) return
+        val window = dao.getContextWindow(first.id) ?: return
+        if (window.startBasis != CheckInContextStartBasis.DAY_START || window.previousCheckInId != null) return
+        val midnight = DateUtils.atTimeMillis(DateUtils.parseLocalDate(localDate), 0, 0)
+        if (window.windowStartAt != midnight) return
+        dao.updateWindowStart(
+            checkInId = first.id,
+            windowStartAt = wakeTimeAt,
+            startBasis = CheckInContextStartBasis.WAKE_TIME,
         )
     }
 

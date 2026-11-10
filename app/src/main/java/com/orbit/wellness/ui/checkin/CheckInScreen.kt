@@ -48,6 +48,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.orbit.wellness.R
+import com.orbit.wellness.data.CheckInIntervalHistory
 import com.orbit.wellness.data.CheckInDrafts
 import com.orbit.wellness.data.local.CheckInAxis
 import com.orbit.wellness.data.local.CheckInContextStartBasis
@@ -422,7 +423,12 @@ private fun LatestCheckInCard(state: CheckInUiState) {
 private fun latestCheckInRangeLabel(state: CheckInUiState): String {
     val end = state.latestRecordedAt ?: return ""
     val start = state.latestWindowStartAt
-    return if (state.latestStartBasis == CheckInContextStartBasis.DAY_START || start == null) {
+    val wakeup = start == null || CheckInIntervalHistory.usesWakeupLabel(
+        startBasis = state.latestStartBasis ?: CheckInContextStartBasis.DAY_START,
+        windowStartAt = start,
+        recordedAt = end,
+    )
+    return if (wakeup) {
         DateUtils.wakeupRangeLabel(
             startMillis = start,
             endMillis = end,

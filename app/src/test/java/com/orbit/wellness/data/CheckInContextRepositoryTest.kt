@@ -276,6 +276,73 @@ class CheckInContextRepositoryTest {
     }
 
     @Test
+    fun reportingWakeMovesOnlyTheFirstMidnightPlaceholder() {
+        val dao = InMemoryCheckInDao()
+        val repository = CheckInRepository(dao) { _ -> null }
+        runBlocking {
+            repository.saveCheckIn(
+                axisValues = listOf(CheckInAxisInput(DefaultCheckInAxes.MOOD, 4)),
+                trigger = "manual",
+                recordedAt = atEight,
+                localDate = localDate,
+                id = "eight",
+            )
+            repository.saveCheckIn(
+                axisValues = listOf(CheckInAxisInput(DefaultCheckInAxes.MOOD, 6)),
+                trigger = "manual",
+                recordedAt = atTen,
+                localDate = localDate,
+                id = "ten",
+            )
+            repository.applyReportedWake(localDate, wake)
+        }
+        val first = runBlocking { repository.getContextWindow("eight") }!!
+        assertEquals(wake, first.windowStartAt)
+        assertEquals(CheckInContextStartBasis.WAKE_TIME, first.startBasis)
+        val second = runBlocking { repository.getContextWindow("ten") }!!
+        assertEquals(atEight, second.windowStartAt)
+        assertEquals(CheckInContextStartBasis.PREVIOUS_CHECK_IN, second.startBasis)
+
+        val editedDao = InMemoryCheckInDao()
+        val editedRepository = CheckInRepository(editedDao) { _ -> null }
+        val editedStart = DateUtils.atTimeMillis(day, 6, 30)
+        runBlocking {
+            editedRepository.saveCheckIn(
+                axisValues = listOf(CheckInAxisInput(DefaultCheckInAxes.MOOD, 4)),
+                trigger = "manual",
+                recordedAt = atEight,
+                localDate = localDate,
+                id = "eight",
+            )
+            editedDao.updateWindowBounds("eight", editedStart, atEight)
+            editedRepository.applyReportedWake(localDate, wake)
+        }
+        val edited = runBlocking { editedRepository.getContextWindow("eight") }!!
+        assertEquals(editedStart, edited.windowStartAt)
+        assertEquals(CheckInContextStartBasis.DAY_START, edited.startBasis)
+    }
+
+    @Test
+    fun reportingWakeLeavesACheckInRecordedBeforeThatWake() {
+        val dao = InMemoryCheckInDao()
+        val repository = CheckInRepository(dao) { _ -> null }
+        val beforeWake = DateUtils.atTimeMillis(day, 6, 0)
+        runBlocking {
+            repository.saveCheckIn(
+                axisValues = listOf(CheckInAxisInput(DefaultCheckInAxes.MOOD, 3)),
+                trigger = "manual",
+                recordedAt = beforeWake,
+                localDate = localDate,
+                id = "early",
+            )
+            repository.applyReportedWake(localDate, wake)
+        }
+        val window = runBlocking { repository.getContextWindow("early") }!!
+        assertEquals(dayStart, window.windowStartAt)
+        assertEquals(CheckInContextStartBasis.DAY_START, window.startBasis)
+    }
+
+    @Test
     fun activityWritesRequireAContextWindow() {
         val repository = CheckInRepository(InMemoryCheckInDao())
         val error = assertThrows(IllegalArgumentException::class.java) {

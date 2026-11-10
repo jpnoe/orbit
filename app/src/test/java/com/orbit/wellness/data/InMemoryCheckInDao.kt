@@ -35,7 +35,11 @@ class InMemoryCheckInDao : CheckInDao {
     override fun observeEnabledAxes(): Flow<List<CheckInAxis>> = MutableStateFlow(emptyList())
 
     override fun observeRecent(limit: Int): Flow<List<CheckInRecord>> =
-        MutableStateFlow(checkIns.values.sortedByDescending { it.recordedAt }.take(limit))
+        checkInRows.map { rows ->
+            rows.sortedWith(
+                compareByDescending<CheckInRecord> { it.recordedAt }.thenByDescending { it.id },
+            ).take(limit)
+        }
 
     override fun observeAll(): Flow<List<CheckInRecord>> = checkInRows
 
@@ -45,7 +49,7 @@ class InMemoryCheckInDao : CheckInDao {
     override fun observeAxisValues(): Flow<List<CheckInAxisValue>> = axisRows
 
     override suspend fun getLatest(): CheckInRecord? =
-        checkIns.values.maxByOrNull { it.recordedAt }
+        checkIns.values.maxWithOrNull(compareBy<CheckInRecord> { it.recordedAt }.thenBy { it.id })
 
     override suspend fun getCheckInsOnDate(localDate: String): List<CheckInRecord> =
         checkIns.values
@@ -107,6 +111,13 @@ class InMemoryCheckInDao : CheckInDao {
         val current = windows.value[checkInId] ?: return
         windows.value = windows.value + (
             checkInId to current.copy(windowStartAt = windowStartAt, windowEndAt = windowEndAt)
+            )
+    }
+
+    override suspend fun updateWindowStart(checkInId: String, windowStartAt: Long, startBasis: String) {
+        val current = windows.value[checkInId] ?: return
+        windows.value = windows.value + (
+            checkInId to current.copy(windowStartAt = windowStartAt, startBasis = startBasis)
             )
     }
 

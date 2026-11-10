@@ -48,8 +48,8 @@ fun CollectSavedFeedback(
     LaunchedEffect(pulses, snackbarHostState, lifecycleOwner) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
             pulses.collect {
-                snackbarHostState.showBriefMessage(messageState.value)
                 onPulseState.value()
+                snackbarHostState.showBriefMessage(messageState.value)
             }
         }
     }

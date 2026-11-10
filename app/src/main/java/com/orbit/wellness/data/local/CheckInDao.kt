@@ -21,7 +21,7 @@ interface CheckInDao {
     @Query(
         """
         SELECT * FROM check_ins
-        ORDER BY recordedAt DESC
+        ORDER BY recordedAt DESC, id DESC
         LIMIT :limit
         """,
     )
@@ -50,7 +50,7 @@ interface CheckInDao {
     @Query(
         """
         SELECT * FROM check_ins
-        ORDER BY recordedAt DESC
+        ORDER BY recordedAt DESC, id DESC
         LIMIT 1
         """,
     )
@@ -132,6 +132,15 @@ interface CheckInDao {
         """,
     )
     suspend fun updateWindowBounds(checkInId: String, windowStartAt: Long, windowEndAt: Long)
+
+    @Query(
+        """
+        UPDATE check_in_context_windows
+        SET windowStartAt = :windowStartAt, startBasis = :startBasis
+        WHERE checkInId = :checkInId
+        """,
+    )
+    suspend fun updateWindowStart(checkInId: String, windowStartAt: Long, startBasis: String)
 
     @Query(
         """
