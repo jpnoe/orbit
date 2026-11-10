@@ -29,6 +29,7 @@ import com.orbit.wellness.domain.checkin.FocalAxisStatus
 import com.orbit.wellness.domain.checkin.ForecastEvidence
 import com.orbit.wellness.domain.checkin.ForecastExampleBundle
 import com.orbit.wellness.domain.checkin.ForecastExampleSummary
+import com.orbit.wellness.domain.checkin.nullTrajectoryGapLabel
 import com.orbit.wellness.domain.checkin.nullTrajectoryAxisLabel
 import com.orbit.wellness.domain.checkin.nullTrajectorySupportLabel
 import com.orbit.wellness.domain.checkin.nullTrajectoryTechnicalLabel
@@ -624,6 +625,7 @@ private fun NullTrajectorySection(
     if (fold == null) {
         Text("This transition has no null-trajectory fold.")
     } else {
+        Text(nullTrajectoryGapLabel(fold))
         fold.axes.forEach { axis ->
             Text("${axisLabel(axis.axisId)} ${nullTrajectoryAxisLabel(axis)}")
         }

@@ -7,6 +7,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -136,6 +137,8 @@ class NullTrajectoryLearnerTest {
         val held = learn(bundle, moodOn = "d" to 0)
         assertEquals(mood(original, "d").parameters, mood(held, "d").parameters)
         assertNotEquals(mood(original, "d").officialResidual, mood(held, "d").officialResidual)
+        assertNotNull(mood(held, "d").forecast)
+        assertNotNull(mood(held, "d").officialResidual)
     }
 
     @Test
@@ -235,6 +238,153 @@ class NullTrajectoryLearnerTest {
     }
 
     @Test
+    fun constantStatusesProduceOneInterceptWithTheSharedPenalty() {
+        val observed = NullGateObservation(1.0, 0.0, 1.0, 0.0, 1.0)
+        val fitted = checkNotNull(fitNullRidge(listOf(observed, observed), listOf(2.0, 2.0)))
+        assertEquals(1, fitted.count { it.column == NullGateColumn.INTERCEPT })
+        val intercept = fitted.single { it.column == NullGateColumn.INTERCEPT }
+        assertEquals(4.0 / 102.0, intercept.coefficient, 1e-9)
+        assertEquals(NULL_TRAJECTORY_SHRINKAGE_LAMBDA, intercept.priorPrecision, 0.0)
+        assertFalse(intercept.nonvarying)
+        listOf(NullGateColumn.RECENT_MEAN_MISSING, NullGateColumn.INCOMING_DELTA_MISSING).forEach { column ->
+            val parameter = fitted.single { it.column == column }
+            assertTrue(parameter.nonvarying)
+            assertEquals(0.0, parameter.coefficient, 0.0)
+        }
+        val encoded = checkNotNull(encodeNullGateRows(listOf(observed, observed)))
+        assertEquals(1.0, encoded[0][NullGateColumn.INTERCEPT.ordinal], 0.0)
+        assertEquals(0.0, encoded[0][NullGateColumn.RECENT_MEAN_MISSING.ordinal], 0.0)
+        assertEquals(0.0, encoded[0][NullGateColumn.INCOMING_DELTA_MISSING.ordinal], 0.0)
+        assertEquals(encoded[0], encoded[1])
+        assertTrue(NULL_TRAJECTORY_ASSUMPTIONS.contains("share one fixed precision of 100"))
+        val forward = checkNotNull(
+            fitNullRidge(
+                listOf(observed, NullGateObservation(null, 0.0, 2.0, 0.25, 0.5), NullGateObservation(3.0, null, 4.0, 0.1, -0.2)),
+                listOf(2.0, -0.5, 0.25),
+            ),
+        )
+        val reversed = checkNotNull(
+            fitNullRidge(
+                listOf(NullGateObservation(3.0, null, 4.0, 0.1, -0.2), NullGateObservation(null, 0.0, 2.0, 0.25, 0.5), observed),
+                listOf(0.25, -0.5, 2.0),
+            ),
+        )
+        assertEquals(forward, reversed)
+    }
+
+    @Test
+    fun missingnessSeparatesAnUnavailableInputFromAnObservedZero() {
+        val missing = NullGateObservation(null, null, 1.0, 0.0, 1.0)
+        val observedZero = NullGateObservation(null, 0.0, 1.0, 0.0, 1.0)
+        val encoded = checkNotNull(encodeNullGateRows(listOf(missing, observedZero)))
+        val column = NullGateColumn.INCOMING_DELTA_MISSING.ordinal
+        assertEquals(1.0, encoded[0][column], 0.0)
+        assertEquals(0.0, encoded[1][column], 0.0)
+        assertNotEquals(encoded[0], encoded[1])
+        assertNotEquals(
+            fitNullRidge(listOf(missing, observedZero), listOf(0.0, 4.0)),
+            fitNullRidge(listOf(observedZero, observedZero.copy(horizonHours = 3.0)), listOf(0.0, 4.0)),
+        )
+    }
+
+    @Test
+    fun negativeSpanIsPreservedAndCausalGapsAreNotScored() {
+        val bundle = bundle()
+        val state = bundle.stateForecasts.examples.single { it.identity.endingKey.raw == "d" }
+        val recorded = bundle.conditionalTransitions.examples.single { it.identity == state.identity }.scenario
+        val projected = projectNullTrajectoryInput(
+            checkNotNull(state.input),
+            recorded.copy(span = recorded.span.copy(millis = -HOUR)),
+            zone,
+        )
+        assertEquals(-1.0, projected.horizonHours(), 0.0)
+        assertEquals(checkNotNull(recorded.clock).endAt, projected.horizonEndAt)
+        val negative = learn(bundle) { scenario ->
+            if (scenario.transitionKey?.raw == "d") scenario.copy(span = scenario.span.copy(millis = -HOUR)) else scenario
+        }
+        val negativeFold = negative.folds.single { it.identity.endingKey.raw == "d" }
+        assertTrue(negativeFold.gaps.isEmpty())
+        assertEquals(-1.0, checkNotNull(negativeFold.horizonHours), 0.0)
+        negativeFold.axes.forEach { axis ->
+            assertEquals(NullForecastFallback.NEGATIVE_RECORDED_HORIZON, axis.fallback)
+            assertNull(axis.forecast)
+            assertNull(axis.officialResidual)
+            assertNull(axis.expectedResidual)
+        }
+        assertFalse(negativeFold.identity.transitionId in mood(negative, "e").trainingIds)
+
+        val reversed = projectForecastExamples(
+            dataset(
+                listOf(point("start", 2 * HOUR, mood = 4), point("end", HOUR, mood = 0)),
+                listOf(interval("end", "start", 2 * HOUR, HOUR)),
+            ),
+        )
+        val invalid = projectNullTrajectoryLearner(
+            reversed.stateForecasts.examples,
+            reversed.conditionalTransitions.examples,
+            zone,
+        ).folds.single()
+        assertTrue(CausalIneligibilityReason.INVALID_CHRONOLOGY in invalid.gaps)
+        assertTrue(checkNotNull(invalid.horizonHours) < 0.0)
+        assertTrue(invalid.axes.all { it.fallback == NullForecastFallback.HELD_EXAMPLE_INELIGIBLE && it.forecast == null && it.officialResidual == null })
+
+        val boundary = projectForecastExamples(
+            dataset(
+                listOf(point("origin", 0, mood = 4), point("wake", HOUR, mood = 2)),
+                listOf(interval("wake", "origin", 0, HOUR, basis = CheckInContextStartBasis.WAKE_TIME)),
+            ),
+        )
+        val boundaryFold = projectNullTrajectoryLearner(
+            boundary.stateForecasts.examples,
+            boundary.conditionalTransitions.examples,
+            zone,
+        ).folds.single()
+        assertEquals(listOf(CausalIneligibilityReason.BOUNDARY_INTERVAL), boundaryFold.gaps)
+        assertTrue(boundaryFold.axes.all { it.fallback == NullForecastFallback.HELD_EXAMPLE_INELIGIBLE && it.forecast == null })
+
+        val open = projectForecastExamples(
+            dataset(
+                listOf(point("a", 0, mood = 4), point("b", HOUR, mood = 0)),
+                listOf(interval("b", "a", 0, HOUR, completedAt = null)),
+            ),
+        )
+        val openFold = projectNullTrajectoryLearner(
+            open.stateForecasts.examples,
+            open.conditionalTransitions.examples,
+            zone,
+        ).folds.single()
+        assertEquals(listOf(CausalIneligibilityReason.INCOMPLETE_CONTEXT), openFold.gaps)
+        assertTrue(openFold.axes.all { it.fallback == NullForecastFallback.HELD_EXAMPLE_INELIGIBLE && it.officialResidual == null })
+
+        val eligible = learn(bundle)
+        assertTrue(mood(eligible, "d").identityTransition(eligible, "c") in mood(eligible, "d").trainingIds)
+        val blocked = learn(bundle, gapsOn = "c" to listOf(CausalIneligibilityReason.INCOMPLETE_CONTEXT))
+        val blockedFold = blocked.folds.single { it.identity.endingKey.raw == "c" }
+        assertEquals(listOf(CausalIneligibilityReason.INCOMPLETE_CONTEXT), blockedFold.gaps)
+        assertTrue(blockedFold.axes.all { it.forecast == null && it.officialResidual == null })
+        assertFalse(blockedFold.identity.transitionId in mood(blocked, "d").trainingIds)
+        assertEquals(
+            eligible.commonSupport.single { it.axisId == DefaultCheckInAxes.MOOD }.count - 1,
+            blocked.commonSupport.single { it.axisId == DefaultCheckInAxes.MOOD }.count,
+        )
+    }
+
+    @Test
+    fun mismatchedPairGapsAreRejected() {
+        val bundle = bundle()
+        val conditional = bundle.conditionalTransitions.examples.map { example ->
+            if (example.identity.endingKey.raw == "c") {
+                example.copy(gaps = example.gaps + CausalIneligibilityReason.INCOMPLETE_CONTEXT)
+            } else {
+                example
+            }
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            projectNullTrajectoryLearner(bundle.stateForecasts.examples, conditional, zone)
+        }
+    }
+
+    @Test
     fun gateClockHorizonAndCommonSupportStayExplicit() {
         val bundle = bundle()
         val input = nullInput(bundle, "d")
@@ -294,16 +444,19 @@ class NullTrajectoryLearnerTest {
         val moodSupport = evaluation.commonSupport.single { it.axisId == DefaultCheckInAxes.MOOD }
         val energySupport = evaluation.commonSupport.single { it.axisId == DefaultCheckInAxes.ENERGY }
         assertEquals(3, moodSupport.count)
+        assertEquals(2, moodSupport.learnedForecastCount)
+        assertEquals(2, moodSupport.persistenceFallbackCount)
         assertEquals(NullComparisonModel.entries, moodSupport.models.map { it.model })
         assertTrue(moodSupport.models.all { it.bias != null && it.mae != null && it.rmse != null })
         assertEquals(0, energySupport.count)
         assertTrue(energySupport.models.all { it.bias == null && it.mae == null && it.rmse == null })
         assertEquals(
             listOf(
+                NullGateColumn.INTERCEPT,
                 NullGateColumn.RECENT_MEAN_CORRECTION,
-                NullGateColumn.RECENT_MEAN_OBSERVED,
+                NullGateColumn.RECENT_MEAN_MISSING,
                 NullGateColumn.INCOMING_DELTA,
-                NullGateColumn.INCOMING_DELTA_OBSERVED,
+                NullGateColumn.INCOMING_DELTA_MISSING,
                 NullGateColumn.HORIZON_HOURS,
                 NullGateColumn.HORIZON_END_HOUR_SIN,
                 NullGateColumn.HORIZON_END_HOUR_COS,
@@ -369,10 +522,16 @@ class NullTrajectoryLearnerTest {
         bundle: ForecastExampleBundle,
         moodOn: Pair<String, Int?>? = null,
         identity: (ExampleIdentity) -> ExampleIdentity = { it },
+        gapsOn: Pair<String, List<CausalIneligibilityReason>>? = null,
         scenario: (TransitionScenario) -> TransitionScenario = { it },
     ): NullTrajectoryEvaluation {
+        fun applyGaps(ending: String, gaps: List<CausalIneligibilityReason>) =
+            if (gapsOn != null && ending == gapsOn.first) gapsOn.second else gaps
         val states = bundle.stateForecasts.examples.map { example ->
-            val next = example.copy(identity = identity(example.identity))
+            val next = example.copy(
+                identity = identity(example.identity),
+                gaps = applyGaps(example.identity.endingKey.raw, example.gaps),
+            )
             if (moodOn != null && next.identity.endingKey.raw == moodOn.first) {
                 next.copy(target = withMood(next.target, moodOn.second))
             } else {
@@ -380,7 +539,11 @@ class NullTrajectoryLearnerTest {
             }
         }
         val conditional = bundle.conditionalTransitions.examples.map { example ->
-            val next = example.copy(identity = identity(example.identity), scenario = scenario(example.scenario))
+            val next = example.copy(
+                identity = identity(example.identity),
+                gaps = applyGaps(example.identity.endingKey.raw, example.gaps),
+                scenario = scenario(example.scenario),
+            )
             if (moodOn != null && next.identity.endingKey.raw == moodOn.first) {
                 next.copy(target = withMood(next.target, moodOn.second))
             } else {
@@ -447,14 +610,21 @@ class NullTrajectoryLearnerTest {
         )
     }
 
-    private fun interval(end: String, previous: String, start: Long, endAt: Long) = ContextIntervalObservationV2(
+    private fun interval(
+        end: String,
+        previous: String,
+        start: Long,
+        endAt: Long,
+        basis: String = CheckInContextStartBasis.PREVIOUS_CHECK_IN,
+        completedAt: Long? = endAt,
+    ) = ContextIntervalObservationV2(
         endingCheckInId = end,
         previousCheckInId = previous,
         windowStartAt = start,
         windowEndAt = endAt,
         durationMillis = endAt - start,
-        startBasis = CheckInContextStartBasis.PREVIOUS_CHECK_IN,
-        completedAt = endAt,
+        startBasis = basis,
+        completedAt = completedAt,
         activity = ActivityCategoryObservationV2(CategoryObservationKindV2.NONE, endAt, emptyList()),
         workout = WorkoutCategoryObservationV2(CategoryObservationKindV2.NONE, endAt, emptyList()),
         diet = DietCategoryObservationV2(CategoryObservationKindV2.NONE, endAt, emptyList()),
