@@ -18,24 +18,27 @@ import kotlin.math.sqrt
  * backgrounds, raw identities, quantities, deeper hops, and successor context
  * are not inputs.
  */
-const val PREDECESSOR_CONTEXT_PROTOCOL = "predecessor-context-learner-v1"
+const val PREDECESSOR_CONTEXT_PROTOCOL = "predecessor-context-learner-v2"
 
-const val PREDECESSOR_CONTEXT_GATE = "predecessor-context-gate-v1"
+const val PREDECESSOR_CONTEXT_GATE = "predecessor-context-gate-v2"
 
 const val PREDECESSOR_CONTEXT_SHRINKAGE_LAMBDA = NULL_TRAJECTORY_SHRINKAGE_LAMBDA
 
 const val PREDECESSOR_CONTEXT_ASSUMPTIONS =
     "Candidate beside null-trajectory-learner-v2, not a replacement. One model per core axis. " +
         "The fitted target is the ending value minus the starting value. The gate is " +
-        "predecessor-context-gate-v1: the null-trajectory-gate-v2 columns in their existing order, " +
-        "then the fourteen causal-predecessor-feature-view-v1 channels. The feature view is the " +
+        "predecessor-context-gate-v2: the null-trajectory-gate-v2 columns in their existing order, " +
+        "then the fourteen causal-predecessor-feature-view-v2 channels. The feature view is the " +
         "anchor state's predecessor neighborhood only. Held-out outgoing behavior, a later transition, " +
         "and a sibling that is not the resolved incoming edge are not inputs. " +
         "Reviewed absence is entries 0 and unknown 0. Reviewed entries is entries 1 and unknown 0. " +
         "Unknown knowledge is entries 0 and unknown 1. An immediate interval the ordered path did not " +
         "accept is unavailable. Its numeric channels are missing and are standardized to zero beside " +
         "that unavailable bit. That encoding is not reviewed absence and it is not an exposure count " +
-        "of zero. Zero hours from a boundary that ends at the focal state stays observed. " +
+        "of zero. Hours since a wake or day start use the boundary interval's stored start, which is " +
+        "the recorded wake or day-start instant. The interval end is the first check-in after that " +
+        "instant. Zero hours is observed only when the focal timestamp equals that start. A stored " +
+        "start later than the focal stays unavailable. " +
         "Sampled backgrounds, raw behavior identities, names, quantities, episode counts, deeper-hop " +
         "summaries, and successor context are not read. " +
         "Membership, ordering, standardization, the nonvarying-column rule, and the shared precision " +
@@ -116,7 +119,7 @@ enum class PredecessorContextColumn {
         USAGE_REVIEWED_ENTRIES -> "usage reviewed entries"
         USAGE_UNKNOWN -> "usage unknown"
         RESOLVED_PREDECESSOR_COUNT -> "resolved predecessor count"
-        HOURS_SINCE_BOUNDARY -> "hours since boundary"
+        HOURS_SINCE_BOUNDARY -> "hours since recorded boundary"
         BOUNDARY_UNAVAILABLE -> "boundary unavailable"
     }
 }

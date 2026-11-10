@@ -14,8 +14,14 @@ package com.orbit.wellness.domain.checkin
  * cases are unavailable here, because the neighborhood does not carry the
  * rejected interval's duration or category review. They are not encoded as
  * reviewed absence or as an exposure count of zero.
+ *
+ * A wake or day-start boundary is the interval's stored start. That is the
+ * recorded wake time or local day start. The interval end is the first
+ * check-in after it. Hours since that boundary are focal time minus the
+ * start. Zero is observed only when those timestamps are equal. A start
+ * later than the focal stays unavailable.
  */
-const val CAUSAL_PREDECESSOR_FEATURE_VIEW_PROTOCOL = "causal-predecessor-feature-view-v1"
+const val CAUSAL_PREDECESSOR_FEATURE_VIEW_PROTOCOL = "causal-predecessor-feature-view-v2"
 
 private const val FEATURE_MILLIS_PER_HOUR = 3_600_000.0
 
@@ -69,7 +75,7 @@ enum class PredecessorFeatureChannel {
         USAGE_REVIEWED_ENTRIES -> "usage reviewed entries"
         USAGE_UNKNOWN -> "usage unknown"
         RESOLVED_PREDECESSOR_COUNT -> "resolved predecessor count"
-        HOURS_SINCE_BOUNDARY -> "hours since boundary"
+        HOURS_SINCE_BOUNDARY -> "hours since recorded boundary"
         BOUNDARY_UNAVAILABLE -> "boundary unavailable"
     }
 }
@@ -78,8 +84,9 @@ fun projectPredecessorFeatureView(neighborhood: CausalPredecessorNeighborhood): 
     val immediate = neighborhood.hops.firstOrNull()?.transition
     val predecessors = neighborhood.hops.count { it.predecessor != null }
     val boundary = neighborhood.hops.singleOrNull { it.boundary }
-    val hoursSinceBoundary = boundary?.let { hop ->
-        (neighborhood.focal.recordedAt - hop.transition.endAt) / FEATURE_MILLIS_PER_HOUR
+    val boundaryAt = boundary?.transition?.startAt?.takeIf { it <= neighborhood.focal.recordedAt }
+    val hoursSinceBoundary = boundaryAt?.let { recorded ->
+        (neighborhood.focal.recordedAt - recorded) / FEATURE_MILLIS_PER_HOUR
     }
     val audit = PredecessorFeatureAudit(
         immediateDurationHours = immediate?.let { it.durationMillis / FEATURE_MILLIS_PER_HOUR },
@@ -91,8 +98,8 @@ fun projectPredecessorFeatureView(neighborhood: CausalPredecessorNeighborhood): 
         usage = immediate?.usageReview,
         resolvedPredecessorCount = predecessors,
         hoursSinceBoundary = hoursSinceBoundary,
-        boundaryUnavailable = boundary == null,
-        boundaryEndAt = boundary?.transition?.endAt,
+        boundaryUnavailable = boundaryAt == null,
+        boundaryAt = boundaryAt,
     )
     return PredecessorFeatureView(
         focalKey = neighborhood.focal.stateKey,
@@ -135,7 +142,7 @@ data class PredecessorFeatureView(
         require((audit.immediateExposureCount == null) == audit.immediateIntervalUnavailable)
         require((audit.activity == null) == audit.immediateIntervalUnavailable)
         require((audit.hoursSinceBoundary == null) == audit.boundaryUnavailable)
-        require((audit.boundaryEndAt == null) == audit.boundaryUnavailable)
+        require((audit.boundaryAt == null) == audit.boundaryUnavailable)
         require(audit.resolvedPredecessorCount >= 0)
         require(audit.immediateExposureCount == null || audit.immediateExposureCount >= 0)
         require(audit.immediateDurationHours == null || audit.immediateDurationHours.isFinite())
@@ -166,7 +173,8 @@ data class PredecessorFeatureAudit(
     val resolvedPredecessorCount: Int,
     val hoursSinceBoundary: Double?,
     val boundaryUnavailable: Boolean,
-    val boundaryEndAt: Long?,
+    /** Stored wake or day-start instant. This is the boundary interval start. */
+    val boundaryAt: Long?,
 )
 
 private fun rawChannel(channel: PredecessorFeatureChannel, audit: PredecessorFeatureAudit): Double? {
@@ -224,8 +232,8 @@ fun predecessorFeatureCompactLabel(view: PredecessorFeatureView): String {
         "diet" to audit.diet,
         "usage" to audit.usage,
     ).joinToString(" · ") { (name, knowledge) -> "$name ${knowledge.phrase()}" }
-    val boundary = audit.hoursSinceBoundary?.let { "hours since wake or day boundary ${formatFeatureNumber(it)}" }
-        ?: "hours since wake or day boundary unavailable"
+    val boundary = audit.hoursSinceBoundary?.let { "hours since recorded wake or day start ${formatFeatureNumber(it)}" }
+        ?: "hours since recorded wake or day start unavailable"
     return "Held-out outgoing behavior is excluded.\n" +
         "$duration\n" +
         "$exposures\n" +
@@ -244,8 +252,8 @@ fun predecessorFeatureAuditLabel(view: PredecessorFeatureView): String {
         "activity ${audit.activity ?: "missing"} · workout ${audit.workout ?: "missing"} · " +
         "diet ${audit.diet ?: "missing"} · usage ${audit.usage ?: "missing"} · " +
         "predecessors ${audit.resolvedPredecessorCount} · " +
-        "boundary hours ${audit.hoursSinceBoundary ?: "missing"} · " +
-        "boundary end ${audit.boundaryEndAt ?: "missing"} · $channels"
+        "hours since recorded boundary ${audit.hoursSinceBoundary ?: "missing"} · " +
+        "recorded boundary ${audit.boundaryAt ?: "missing"} · $channels"
 }
 
 fun predecessorFeatureMissingLabel(): String =

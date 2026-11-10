@@ -60,16 +60,56 @@ class PredecessorContextLearnerTest {
             ),
             "focal",
         )
-        assertEquals(0.0, checkNotNull(wake.audit.hoursSinceBoundary), 0.0)
+        assertEquals(1.0, checkNotNull(wake.audit.hoursSinceBoundary), 0.0)
+        assertEquals(start, wake.audit.boundaryAt)
         assertEquals(false, wake.audit.boundaryUnavailable)
         assertEquals(0, wake.audit.resolvedPredecessorCount)
         assertEquals(1.0, checkNotNull(wake.audit.immediateDurationHours), 0.0)
-        assertEquals(0.0, checkNotNull(wake.value(PredecessorFeatureChannel.HOURS_SINCE_BOUNDARY)), 0.0)
+        assertEquals(1.0, wake.value(PredecessorFeatureChannel.HOURS_SINCE_BOUNDARY), 0.0)
         assertEquals(0.0, wake.value(PredecessorFeatureChannel.BOUNDARY_UNAVAILABLE), 0.0)
+        val coincident = view(
+            dataset(
+                states = listOf(state("focal", start, mood = 4)),
+                intervals = listOf(boundary("focal", "before", start, start, CheckInContextStartBasis.WAKE_TIME)),
+            ),
+            "focal",
+        )
+        assertEquals(0.0, checkNotNull(coincident.audit.hoursSinceBoundary), 0.0)
+        assertEquals(start, coincident.audit.boundaryAt)
+        assertEquals(0, coincident.audit.resolvedPredecessorCount)
         val open = view(chain(), "e")
         assertEquals(true, open.audit.boundaryUnavailable)
         assertNull(open.audit.hoursSinceBoundary)
         assertEquals(1.0, open.value(PredecessorFeatureChannel.BOUNDARY_UNAVAILABLE), 0.0)
+    }
+
+    @Test
+    fun hoursSinceBoundaryUseTheRecordedWakeStart() {
+        val boundaryStart = 1_794_255_600_000L
+        val boundaryEnd = 1_794_257_156_159L
+        val focalAt = 1_794_266_819_645L
+        val projected = view(
+            dataset(
+                states = listOf(
+                    state("post", boundaryEnd, mood = 3),
+                    state("focal", focalAt, mood = 4),
+                ),
+                intervals = listOf(
+                    boundary("post", null, boundaryStart, boundaryEnd, CheckInContextStartBasis.WAKE_TIME),
+                    linked("focal", "post", boundaryEnd, focalAt),
+                ),
+            ),
+            "focal",
+        )
+        val fromStart = (focalAt - boundaryStart) / 3_600_000.0
+        val fromEnd = (focalAt - boundaryEnd) / 3_600_000.0
+        assertEquals(fromStart, checkNotNull(projected.audit.hoursSinceBoundary), 0.0)
+        assertTrue(fromStart > fromEnd)
+        assertEquals(boundaryStart, projected.audit.boundaryAt)
+        assertEquals(false, projected.audit.boundaryUnavailable)
+        assertEquals(1, projected.audit.resolvedPredecessorCount)
+        assertTrue(predecessorFeatureCompactLabel(projected).contains("hours since recorded wake or day start"))
+        assertTrue(predecessorFeatureAuditLabel(projected).contains("recorded boundary $boundaryStart"))
     }
 
     @Test
@@ -283,9 +323,9 @@ class PredecessorContextLearnerTest {
             assertFalse(feature.contains(token))
             assertFalse(learner.contains(token))
         }
-        assertTrue(feature.contains("causal-predecessor-feature-view-v1"))
-        assertTrue(learner.contains("predecessor-context-learner-v1"))
-        assertTrue(learner.contains("predecessor-context-gate-v1"))
+        assertTrue(feature.contains("causal-predecessor-feature-view-v2"))
+        assertTrue(learner.contains("predecessor-context-learner-v2"))
+        assertTrue(learner.contains("predecessor-context-gate-v2"))
         assertTrue(learner.contains("projectNullTrajectoryLearner"))
         assertFalse(learner.contains("fun projectNullTrajectoryLearner"))
         val lab = source(
@@ -526,8 +566,11 @@ class PredecessorContextLearnerTest {
         usage = reviewedNoneUsage(endAt),
     )
 
-    private fun boundary(end: String, previous: String, start: Long, endAt: Long, basis: String) =
-        linked(end, previous, start, endAt).copy(startBasis = basis)
+    private fun boundary(end: String, previous: String?, start: Long, endAt: Long, basis: String) =
+        linked(end, previous ?: end, start, endAt).copy(
+            previousCheckInId = previous,
+            startBasis = basis,
+        )
 
     private fun reviewedNoneActivity(at: Long) =
         ActivityCategoryObservationV2(CategoryObservationKindV2.NONE, at, emptyList())
