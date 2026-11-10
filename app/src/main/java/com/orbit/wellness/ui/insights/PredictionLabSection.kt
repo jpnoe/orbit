@@ -29,6 +29,10 @@ import com.orbit.wellness.domain.checkin.FocalAxisStatus
 import com.orbit.wellness.domain.checkin.ForecastEvidence
 import com.orbit.wellness.domain.checkin.ForecastExampleBundle
 import com.orbit.wellness.domain.checkin.ForecastExampleSummary
+import com.orbit.wellness.domain.checkin.nullTrajectoryAxisLabel
+import com.orbit.wellness.domain.checkin.nullTrajectorySupportLabel
+import com.orbit.wellness.domain.checkin.nullTrajectoryTechnicalLabel
+import com.orbit.wellness.domain.checkin.projectNullTrajectoryLearner
 import com.orbit.wellness.domain.checkin.ObservationProcessContext
 import com.orbit.wellness.domain.checkin.ObservationProcessDataset
 import com.orbit.wellness.domain.checkin.ObservationSampling
@@ -154,6 +158,7 @@ private fun RecordedReplayPane(bundle: ForecastExampleBundle) {
             }
             Text("Transition ${attempt.transitionId}. Anchor ${attempt.anchorKey.raw}.")
             CausalPreparationSection(bundle, attempt.transitionId)
+            NullTrajectorySection(bundle, attempt.transitionId)
             val anchorKey = attempt.anchorKey
             AttemptForecasts(
                 attempt = attempt,
@@ -593,6 +598,49 @@ private fun CausalPreparationSection(
             Text("Technical details")
         }
         if (technical) Text(causalPreparationUnseenLabel(conditionalFold))
+    }
+}
+
+@Composable
+private fun NullTrajectorySection(
+    bundle: ForecastExampleBundle,
+    transitionId: String,
+) {
+    var open by remember(transitionId) { mutableStateOf(false) }
+    TextButton(onClick = { open = !open }) {
+        Text("Null trajectory learner")
+    }
+    if (!open) return
+    val zone = remember { ZoneId.systemDefault() }
+    val evaluation = remember(bundle, zone.id) {
+        projectNullTrajectoryLearner(
+            bundle.stateForecasts.examples,
+            bundle.conditionalTransitions.examples,
+            zone,
+        )
+    }
+    Text("Expected ending state from the starting state and the horizon, with behavior identity withheld.")
+    val fold = evaluation.folds.singleOrNull { it.identity.transitionId == transitionId }
+    if (fold == null) {
+        Text("This transition has no null-trajectory fold.")
+    } else {
+        fold.axes.forEach { axis ->
+            Text("${axisLabel(axis.axisId)} ${nullTrajectoryAxisLabel(axis)}")
+        }
+        var technical by remember(transitionId) { mutableStateOf(false) }
+        TextButton(onClick = { technical = !technical }) {
+            Text("Technical details")
+        }
+        if (technical) {
+            Text(evaluation.assumptions)
+            fold.axes.forEach { axis ->
+                Text("${axisLabel(axis.axisId)} ${nullTrajectoryTechnicalLabel(evaluation, axis)}")
+            }
+        }
+    }
+    Text("Walk-forward common support for the null forecast, Persistence, and Recent mean.")
+    evaluation.commonSupport.forEach { support ->
+        Text("${axisLabel(support.axisId)} ${nullTrajectorySupportLabel(support)}")
     }
 }
 

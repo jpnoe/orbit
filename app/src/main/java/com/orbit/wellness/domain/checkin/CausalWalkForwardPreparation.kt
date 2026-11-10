@@ -221,7 +221,7 @@ fun projectCausalWalkForwardPreparation(
             emptyList()
         } else {
             pairs.filter { prior ->
-                priorQualifies(prior.first, held.first.identity)
+                causalPriorQualifies(prior.first, held.first.identity)
             }
         }
         val priorIds = priors.map { it.first.identity.transitionId }.sorted()
@@ -382,7 +382,7 @@ private fun fold(
     )
 }
 
-private fun priorQualifies(prior: StateForecastExample, held: ExampleIdentity): Boolean {
+fun causalPriorQualifies(prior: StateForecastExample, held: ExampleIdentity): Boolean {
     val origin = held.anchorAt ?: return false
     if (prior.identity.transitionId == held.transitionId) return false
     if (!prior.available || prior.input == null) return false
