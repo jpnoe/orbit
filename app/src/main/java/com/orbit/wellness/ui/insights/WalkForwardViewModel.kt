@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.orbit.wellness.data.CheckInAnalysisRepository
+import com.orbit.wellness.domain.checkin.BidirectionalEvidenceDataset
 import com.orbit.wellness.domain.checkin.CausalPredecessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.ForecastExampleBundle
 import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDataset
@@ -21,6 +22,7 @@ sealed interface WalkForwardUiState {
         val examples: ForecastExampleBundle,
         val neighborhoods: CausalPredecessorNeighborhoodDataset,
         val successorNeighborhoods: RetrospectiveSuccessorNeighborhoodDataset,
+        val bidirectionalEvidence: BidirectionalEvidenceDataset,
     ) : WalkForwardUiState
 }
 
@@ -41,6 +43,7 @@ class WalkForwardViewModel(
                 examples = snapshot.examples,
                 neighborhoods = snapshot.neighborhoods,
                 successorNeighborhoods = snapshot.successorNeighborhoods,
+                bidirectionalEvidence = snapshot.bidirectionalEvidence,
             )
         }
         .stateIn(

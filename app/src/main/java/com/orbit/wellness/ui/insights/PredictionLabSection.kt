@@ -29,8 +29,11 @@ import com.orbit.wellness.domain.checkin.FocalAxisStatus
 import com.orbit.wellness.domain.checkin.ForecastEvidence
 import com.orbit.wellness.domain.checkin.ForecastExampleBundle
 import com.orbit.wellness.domain.checkin.ForecastExampleSummary
+import com.orbit.wellness.domain.checkin.BidirectionalEvidenceDataset
 import com.orbit.wellness.domain.checkin.CausalPredecessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDataset
+import com.orbit.wellness.domain.checkin.bidirectionalAuditLabel
+import com.orbit.wellness.domain.checkin.bidirectionalMissingLabel
 import com.orbit.wellness.domain.checkin.successorCompactLabel
 import com.orbit.wellness.domain.checkin.successorMissingLabel
 import com.orbit.wellness.domain.checkin.successorTechnicalLabel
@@ -113,6 +116,7 @@ fun PredictionResearchPane(walkForwardViewModel: WalkForwardViewModel) {
             bundle = state.examples,
             neighborhoods = state.neighborhoods,
             successorNeighborhoods = state.successorNeighborhoods,
+            bidirectionalEvidence = state.bidirectionalEvidence,
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -123,6 +127,7 @@ private fun PredictionLab(
     bundle: ForecastExampleBundle,
     neighborhoods: CausalPredecessorNeighborhoodDataset,
     successorNeighborhoods: RetrospectiveSuccessorNeighborhoodDataset,
+    bidirectionalEvidence: BidirectionalEvidenceDataset,
     modifier: Modifier = Modifier,
 ) {
     val projection = bundle.walkForward
@@ -144,7 +149,12 @@ private fun PredictionLab(
             )
         }
         when (mode) {
-            PredictionLabMode.REPLAY -> RecordedReplayPane(bundle, neighborhoods, successorNeighborhoods)
+            PredictionLabMode.REPLAY -> RecordedReplayPane(
+                bundle,
+                neighborhoods,
+                successorNeighborhoods,
+                bidirectionalEvidence,
+            )
             PredictionLabMode.SANDBOX -> PredictionSandboxPane(
                 projection.anchors,
                 projection.stateSide,
@@ -159,6 +169,7 @@ private fun RecordedReplayPane(
     bundle: ForecastExampleBundle,
     neighborhoods: CausalPredecessorNeighborhoodDataset,
     successorNeighborhoods: RetrospectiveSuccessorNeighborhoodDataset,
+    bidirectionalEvidence: BidirectionalEvidenceDataset,
 ) {
     val projection = bundle.walkForward
     val observationProcess = bundle.observationProcess
@@ -186,6 +197,7 @@ private fun RecordedReplayPane(
             CausalPredecessorSection(neighborhoods, attempt.anchorKey)
             PredecessorContextSection(bundle, neighborhoods, attempt.transitionId)
             RetrospectiveSuccessorSection(successorNeighborhoods, attempt.transitionId)
+            BidirectionalEvidenceSection(bidirectionalEvidence, attempt.anchorKey.raw)
             val anchorKey = attempt.anchorKey
             AttemptForecasts(
                 attempt = attempt,
@@ -693,6 +705,20 @@ private fun RetrospectiveSuccessorSection(
         Text("Technical details")
     }
     if (technical) Text(successorTechnicalLabel(neighborhood))
+}
+
+@Composable
+private fun BidirectionalEvidenceSection(
+    evidence: BidirectionalEvidenceDataset,
+    focalStateId: String,
+) {
+    var open by remember(focalStateId) { mutableStateOf(false) }
+    TextButton(onClick = { open = !open }) {
+        Text("Retrospective multiscale bidirectional evidence")
+    }
+    if (!open) return
+    val view = evidence.forFocal(focalStateId)
+    Text(if (view.focal == null) bidirectionalMissingLabel() else bidirectionalAuditLabel(view))
 }
 
 @Composable
