@@ -150,7 +150,7 @@ class RetrospectiveSuccessorNeighborhoodTest {
         assertEquals(SuccessorStopReason.DISCONNECTED_AT_BOUNDARY, neighborhood.stop.reason)
         assertTrue(neighborhood.observableCutoffAt!! > checkNotNull(neighborhood.hops.last().successor).recordedAt)
         val compact = successorCompactLabel(neighborhood)
-        assertTrue(compact.contains("No graph-linked successor. The next recorded check-in is a wake or day start."))
+        assertTrue(compact.contains("No graph-linked successor. Every check-in at the earliest later time is a wake or day start."))
         assertFalse(compact.contains("Nothing recorded later"))
         assertFalse(compact.contains("Later sampled records exist"))
         val sixHours = neighborhood.windows.single { it.scale == SuccessorWindowScale.FOLLOWING_6_HOURS }
@@ -314,12 +314,91 @@ class RetrospectiveSuccessorNeighborhoodTest {
         assertEquals(SuccessorStopReason.DISCONNECTED_AT_BOUNDARY, neighborhood.stop.reason)
         assertTrue(
             successorCompactLabel(neighborhood).contains(
-                "The next recorded check-in is a wake or day start.",
+                "Every check-in at the earliest later time is a wake or day start.",
             ),
         )
         val sixHours = neighborhood.windows.single { it.scale == SuccessorWindowScale.FOLLOWING_6_HOURS }
         assertTrue(sixHours.choices.intervals.map { it.key.raw }.containsAll(listOf("woken", "after")))
         assertTrue(sixHours.outcomes.intervals.map { it.key.raw }.containsAll(listOf("woken", "after")))
+    }
+
+    @Test
+    fun aTiedBoundaryCohortIsDisconnected() {
+        val start = 42L * DAY
+        val tied = start + 3 * HOUR
+        val neighborhood = project(
+            dataset(
+                states = listOf(
+                    state("origin", start, mood = 1),
+                    state("end", start + HOUR, mood = 2),
+                    state("z-day", tied, mood = 3),
+                    state("a-wake", tied, mood = 4),
+                    state("later", start + 5 * HOUR, mood = 5),
+                ),
+                intervals = listOf(
+                    linked("end", "origin", start, start + HOUR),
+                    boundary("z-day", null, start + HOUR, tied, CheckInContextStartBasis.DAY_START),
+                    boundary("a-wake", null, start + HOUR, tied, CheckInContextStartBasis.WAKE_TIME),
+                    linked("later", "a-wake", tied, start + 5 * HOUR),
+                ),
+            ),
+        ).neighborhood("end")
+        assertEquals(listOf("end"), neighborhood.hops.map { it.transition.key.raw })
+        assertEquals(SuccessorStopReason.DISCONNECTED_AT_BOUNDARY, neighborhood.stop.reason)
+    }
+
+    @Test
+    fun aMixedTiedCohortStaysAnOrdinaryMissingEdge() {
+        val start = 43L * DAY
+        val tied = start + 3 * HOUR
+        listOf("a-wake" to "z-later", "z-wake" to "a-later").forEach { (boundaryId, ordinaryId) ->
+            val neighborhood = project(
+                dataset(
+                    states = listOf(
+                        state("origin", start, mood = 1),
+                        state("end", start + HOUR, mood = 2),
+                        state("side", start, mood = 3),
+                        state(boundaryId, tied, mood = 4),
+                        state(ordinaryId, tied, mood = 5),
+                    ),
+                    intervals = listOf(
+                        linked("end", "origin", start, start + HOUR),
+                        boundary(boundaryId, null, start + HOUR, tied, CheckInContextStartBasis.WAKE_TIME),
+                        linked(ordinaryId, "side", start, tied),
+                    ),
+                ),
+            ).neighborhood("end")
+            assertEquals(boundaryId, listOf("end"), neighborhood.hops.map { it.transition.key.raw })
+            assertEquals(boundaryId, SuccessorStopReason.NO_GRAPH_LINKED_SUCCESSOR, neighborhood.stop.reason)
+            assertFalse(successorCompactLabel(neighborhood).contains("wake or day start"))
+        }
+    }
+
+    @Test
+    fun tiedOrdinaryCheckInsStayOrdinaryWhenABoundaryFollows() {
+        val start = 48L * DAY
+        val tied = start + 3 * HOUR
+        val neighborhood = project(
+            dataset(
+                states = listOf(
+                    state("origin", start, mood = 1),
+                    state("end", start + HOUR, mood = 2),
+                    state("left-side", start, mood = 3),
+                    state("right-side", start, mood = 4),
+                    state("a-later", tied, mood = 5),
+                    state("z-later", tied, mood = 6),
+                    state("morning", start + 5 * HOUR, mood = 7),
+                ),
+                intervals = listOf(
+                    linked("end", "origin", start, start + HOUR),
+                    linked("a-later", "left-side", start, tied),
+                    linked("z-later", "right-side", start, tied),
+                    boundary("morning", "a-later", tied, start + 5 * HOUR, CheckInContextStartBasis.DAY_START),
+                ),
+            ),
+        ).neighborhood("end")
+        assertEquals(listOf("end"), neighborhood.hops.map { it.transition.key.raw })
+        assertEquals(SuccessorStopReason.NO_GRAPH_LINKED_SUCCESSOR, neighborhood.stop.reason)
     }
 
     @Test

@@ -16,9 +16,11 @@ import com.orbit.wellness.data.local.CheckInContextCategories
  * contains future behavior and outcomes. It is not a forecast input. End of
  * recorded history means the last adopted successor reaches the observable
  * cutoff. No outgoing edge while a later check-in exists is no graph-linked
- * successor. It is disconnected at a boundary only when the earliest later
- * check-in ends a wake or day-start. An ordinary later check-in keeps the
- * ordinary reason even if a boundary is stored after it.
+ * successor. It is disconnected at a boundary only when every check-in at the
+ * earliest later time ends a wake or day-start. Check-ins that share that
+ * time are one cohort. Id order does not choose among them. A mixed cohort
+ * keeps the ordinary missing-edge reason. An ordinary later check-in keeps
+ * that reason even if a boundary is stored after it.
  *
  * The observable cutoff is the latest stored check-in `recordedAt` in the
  * reconstruction. It is not wall-clock now. Each future window ends at the
@@ -54,7 +56,9 @@ const val RETROSPECTIVE_SUCCESSOR_NEIGHBORHOOD_ASSUMPTIONS =
         "Equal-timestamp candidates stay in occurrence-identity order, which is not a temporal order. " +
         "End of recorded history means the last adopted successor reaches the observable cutoff. " +
         "No outgoing edge while a later check-in exists is no graph-linked successor. " +
-        "That stop is disconnected at a boundary only when the earliest later check-in ends a wake or day-start. " +
+        "That stop is disconnected at a boundary only when every check-in at the earliest later time ends a wake or day-start. " +
+        "Check-ins that share that time are one cohort, and id order does not choose among them. " +
+        "A mixed cohort stays no graph-linked successor. " +
         "An ordinary later check-in stays no graph-linked successor even when a boundary is stored after it. " +
         "Sampled windows may still cross a boundary. " +
         "Reviewed absence stays a property of a recorded interval. " +
@@ -410,12 +414,15 @@ private fun noOutgoingReason(
 ): SuccessorStopReason {
     val terminalAt = terminal.state.recordedAt
     if (cutoff == null || terminalAt >= cutoff) return SuccessorStopReason.END_OF_RECORDED_HISTORY
-    val next = statesById.values
-        .filter { it.state.recordedAt > terminalAt }
-        .minWithOrNull(compareBy({ it.state.recordedAt }, { it.id }))
-        ?: return SuccessorStopReason.NO_GRAPH_LINKED_SUCCESSOR
-    val nextInterval = evidence.singleOrNull { it.endStateKey.raw == next.id }
-    return if (nextInterval != null && isBoundary(nextInterval)) {
+    val later = statesById.values.filter { it.state.recordedAt > terminalAt }
+    if (later.isEmpty()) return SuccessorStopReason.NO_GRAPH_LINKED_SUCCESSOR
+    val earliestAt = later.minOf { it.state.recordedAt }
+    val cohort = later.filter { it.state.recordedAt == earliestAt }
+    val boundaryCohort = cohort.all { state ->
+        val rows = evidence.filter { it.endStateKey.raw == state.id }
+        rows.isNotEmpty() && rows.all(::isBoundary)
+    }
+    return if (boundaryCohort) {
         SuccessorStopReason.DISCONNECTED_AT_BOUNDARY
     } else {
         SuccessorStopReason.NO_GRAPH_LINKED_SUCCESSOR
@@ -622,7 +629,7 @@ fun successorCompactLabel(neighborhood: RetrospectiveSuccessorNeighborhood): Str
         SuccessorStopReason.NO_GRAPH_LINKED_SUCCESSOR ->
             "No graph-linked successor. Later sampled records exist. ${neighborhood.stop.reason.name}"
         SuccessorStopReason.DISCONNECTED_AT_BOUNDARY ->
-            "No graph-linked successor. The next recorded check-in is a wake or day start. " +
+            "No graph-linked successor. Every check-in at the earliest later time is a wake or day start. " +
                 neighborhood.stop.reason.name
         SuccessorStopReason.BOUNDARY_REACHED ->
             "Graph-linked wake or day start stops the ordered path. The next waking segment is not entered."
