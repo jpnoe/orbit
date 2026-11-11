@@ -11,6 +11,9 @@ import kotlin.math.max
  * Past evidence is the predecessor path. Future evidence is the successor
  * path. A wake or day-start remains a boundary marker and starts another
  * waking segment. An ambiguous fork is not assigned to one of its branches.
+ * The published span keeps interval identity and in-span endpoints. It does
+ * not retain the predecessor or successor hop, so a crossing interval cannot
+ * carry a state value from outside the requested radius.
  */
 const val RETROSPECTIVE_MULTISCALE_BIDIRECTIONAL_EVIDENCE_PROTOCOL =
     "retrospective-multiscale-bidirectional-evidence-v1"
@@ -27,6 +30,7 @@ const val RETROSPECTIVE_MULTISCALE_BIDIRECTIONAL_EVIDENCE_ASSUMPTIONS =
         "Left coverage is truncated at the earliest check-in at or before the anchor. " +
         "Right coverage is censored at the latest stored check-in. " +
         "The two sides use their own radii. Every requested span stays visible. " +
+        "An interval that crosses a span bound stays identified, and the state beyond that bound is not carried on the hop. " +
         "No span is preferred. Coherence, stability, penalties, clusters, activity effects, and recommendations are not computed."
 
 private const val MILLIS_PER_HOUR = 3_600_000L
@@ -155,24 +159,63 @@ data class BidirectionalCandidate(
         require(leftCoverage == expectedLeft)
         require(rightCoverage == expectedRight)
         require(
-            segments == segments.sortedWith(compareBy({ it.rootRecordedAt }, { it.rootStateId })),
+            segments == segments.sortedWith(compareBy({ it.rangeStart }, { it.rootStateId })),
         )
+    }
+}
+
+enum class SegmentKind {
+    FOCAL_ORDERED,
+    ORDERED_CONTINUATION,
+    SAMPLED_OR_DISCONNECTED,
+    BRANCH_LOCAL_PREDECESSOR,
+}
+
+/**
+ * One interval as seen inside a requested span.
+ *
+ * [transitionKey] names the interval. When [endOutsideSpan] is set, that key
+ * is the check-in beyond the right bound and is not an in-span state. This
+ * type has no axis values, emotion, or predecessor or successor state view.
+ */
+data class SpanInterval(
+    val transitionKey: TransitionOccurrenceKey,
+    val startAt: Long,
+    val endAt: Long,
+    val startBasis: String,
+    val boundary: Boolean,
+    val startOutsideSpan: Boolean,
+    val endOutsideSpan: Boolean,
+    val outcomeInSpan: Boolean,
+    val inSpanStateIds: List<String>,
+) {
+    init {
+        require(inSpanStateIds == inSpanStateIds.distinct())
+        require(!endOutsideSpan || !outcomeInSpan)
+        require(!endOutsideSpan || transitionKey.raw !in inSpanStateIds)
     }
 }
 
 data class BidirectionalSegment(
     val rootStateId: String,
-    val rootRecordedAt: Long,
+    val rangeStart: Long,
+    val rangeEnd: Long,
+    val kind: SegmentKind,
     val statesInSpan: List<String>,
-    val pastHops: List<PredecessorHop>,
-    val pastStop: PredecessorStop,
-    val futureHops: List<SuccessorHop>,
+    val pastEvidence: List<SpanInterval>,
+    val pastReason: PredecessorStopReason,
+    val futureEvidence: List<SpanInterval>,
     val futureReason: SuccessorStopReason,
-    val futureCandidates: List<SuccessorCandidate>,
+    val futureCandidateKeys: List<String>,
 ) {
     init {
-        require(futureCandidates == futureCandidates.sortedBy { it.transitionKey.raw })
-        require(futureReason != SuccessorStopReason.AMBIGUOUS_SUCCESSOR || futureCandidates.size > 1)
+        require(rangeStart <= rangeEnd)
+        require(statesInSpan.isNotEmpty())
+        require(futureCandidateKeys == futureCandidateKeys.sorted())
+        require(futureReason != SuccessorStopReason.AMBIGUOUS_SUCCESSOR || futureCandidateKeys.size > 1)
+        val evidence = pastEvidence + futureEvidence
+        require(evidence.flatMap { it.inSpanStateIds }.all { it in statesInSpan })
+        require(evidence.filter { it.endOutsideSpan }.none { it.transitionKey.raw in statesInSpan })
     }
 }
 
@@ -254,14 +297,15 @@ private fun candidate(
         latest >= requestedEnd -> requestedEnd
         else -> latest
     }
-    val visible = segments.mapNotNull { segment ->
+    val windowed = segments.mapNotNull { segment ->
         windowed(segment, anchor, effectiveStart, effectiveEnd)
-    }.sortedWith(compareBy({ it.rootRecordedAt }, { it.rootStateId }))
+    }
+    val visible = classify(focal.stateKey.raw, windowed)
+        .sortedWith(compareBy({ it.rangeStart }, { it.rootStateId }))
     val boundaryIds = visible.flatMap { segment ->
-        val transitions = segment.pastHops.map { it.transition } + segment.futureHops.map { it.transition }
-        transitions
-            .filter { CausalIneligibilityReason.BOUNDARY_INTERVAL in it.eligibility.reasons }
-            .map { it.key.raw }
+        (segment.pastEvidence + segment.futureEvidence)
+            .filter { it.boundary }
+            .map { it.transitionKey.raw }
     }.toSet()
     val leftSpan = (anchor - effectiveStart).coerceAtLeast(0L)
     val rightSpan = (effectiveEnd - anchor).coerceAtLeast(0L)
@@ -284,29 +328,200 @@ private fun candidate(
     )
 }
 
+private data class Windowed(
+    val built: BuiltSegment,
+    val rootStateId: String,
+    val rangeStart: Long,
+    val rangeEnd: Long,
+    val statesInSpan: List<String>,
+    val pastEvidence: List<SpanInterval>,
+    val futureEvidence: List<SpanInterval>,
+    val futureCandidateKeys: List<String>,
+)
+
 private fun windowed(
     segment: BuiltSegment,
     anchor: Long,
     effectiveStart: Long,
     effectiveEnd: Long,
-): BidirectionalSegment? {
-    val past = segment.past.hops.filter { overlaps(it.transition, effectiveStart, effectiveEnd) }
-    val future = segment.futureHops.filter { overlaps(it.transition, effectiveStart, effectiveEnd) }
-    val states = segmentStates(segment)
+): Windowed? {
+    val timed = segmentStates(segment)
         .filter { (_, at) -> at in effectiveStart..effectiveEnd }
         .sortedWith(compareBy({ it.second }, { it.first }))
-        .map { it.first }
-    if (past.isEmpty() && future.isEmpty() && states.isEmpty()) return null
-    return BidirectionalSegment(
-        rootStateId = segment.root.id,
-        rootRecordedAt = segment.root.state.recordedAt,
+    if (timed.isEmpty()) return null
+    val states = timed.map { it.first }.distinct()
+    val rootInSpan = segment.root.state.recordedAt in effectiveStart..effectiveEnd
+    val keys = segment.futureCandidates
+        .filter { it.startAt < effectiveEnd && it.endAt > effectiveStart }
+        .map { it.transitionKey.raw }
+        .distinct()
+        .sorted()
+    return Windowed(
+        built = segment,
+        rootStateId = if (rootInSpan) segment.root.id else states.first(),
+        rangeStart = timed.minOf { it.second },
+        rangeEnd = timed.maxOf { it.second },
         statesInSpan = states,
-        pastHops = past,
-        pastStop = segment.past.stop,
-        futureHops = future,
-        futureReason = segment.futureReason,
-        futureCandidates = segment.futureCandidates,
+        pastEvidence = segment.past.hops.mapNotNull { hop ->
+            projectPredecessor(hop, anchor, effectiveStart, effectiveEnd)
+        },
+        futureEvidence = segment.futureHops.mapNotNull { hop ->
+            projectSuccessor(hop, anchor, effectiveStart, effectiveEnd)
+        },
+        futureCandidateKeys = keys,
     )
+}
+
+private fun classify(focalId: String, windowed: List<Windowed>): List<BidirectionalSegment> {
+    val focal = windowed.singleOrNull { focalId in forwardStateIds(it.built) }
+    val continuation = if (focal == null) emptySet() else continuations(focal, windowed)
+    val focalPath = focal?.let { pathStateIds(it.built) }.orEmpty()
+    val adoptedFuture = focal?.built?.futureHops
+        ?.mapNotNull { it.successor?.stateKey?.raw }
+        ?.toSet()
+        .orEmpty()
+    val branchRoots = focal?.built?.futureCandidates
+        ?.map { it.endStateId }
+        ?.toSet()
+        .orEmpty() - adoptedFuture
+    return windowed.map { item ->
+        val kind = when {
+            item === focal -> SegmentKind.FOCAL_ORDERED
+            continuation.any { it === item } -> SegmentKind.ORDERED_CONTINUATION
+            isBranchLocal(item, focalPath, branchRoots) -> SegmentKind.BRANCH_LOCAL_PREDECESSOR
+            else -> SegmentKind.SAMPLED_OR_DISCONNECTED
+        }
+        BidirectionalSegment(
+            rootStateId = item.rootStateId,
+            rangeStart = item.rangeStart,
+            rangeEnd = item.rangeEnd,
+            kind = kind,
+            statesInSpan = item.statesInSpan,
+            pastEvidence = item.pastEvidence,
+            pastReason = item.built.past.stop.reason,
+            futureEvidence = item.futureEvidence,
+            futureReason = item.built.futureReason,
+            futureCandidateKeys = item.futureCandidateKeys,
+        )
+    }
+}
+
+private fun continuations(focal: Windowed, windowed: List<Windowed>): Set<Windowed> {
+    val linked = mutableSetOf<Windowed>()
+    linked += focal
+    val keys = boundaryKeys(focal.built).toMutableSet()
+    var grew = true
+    while (grew) {
+        grew = false
+        windowed.forEach { item ->
+            if (linked.any { it === item }) return@forEach
+            val itemKeys = boundaryKeys(item.built)
+            if (itemKeys.any { it in keys }) {
+                linked += item
+                keys += itemKeys
+                grew = true
+            }
+        }
+    }
+    linked.removeAll { it === focal }
+    return linked
+}
+
+private fun isBranchLocal(
+    item: Windowed,
+    focalPath: Set<String>,
+    branchRoots: Set<String>,
+): Boolean {
+    if (item.built.root.id in branchRoots) return true
+    return item.built.past.hops.any { hop -> hop.predecessor?.stateKey?.raw in focalPath }
+}
+
+private fun boundaryKeys(segment: BuiltSegment): Set<String> {
+    val past = segment.past.hops.filter { it.boundary }.map { it.transition.key.raw }
+    val future = segment.futureHops.filter { isBoundary(it.transition) }.map { it.transition.key.raw }
+    return (past + future).toSet()
+}
+
+private fun forwardStateIds(segment: BuiltSegment): Set<String> {
+    val ids = mutableSetOf(segment.root.id)
+    segment.futureHops.mapNotNullTo(ids) { it.successor?.stateKey?.raw }
+    return ids
+}
+
+private fun pathStateIds(segment: BuiltSegment): Set<String> {
+    val ids = forwardStateIds(segment).toMutableSet()
+    segment.past.hops.mapNotNullTo(ids) { it.predecessor?.stateKey?.raw }
+    return ids
+}
+
+private fun projectPredecessor(
+    hop: PredecessorHop,
+    anchor: Long,
+    start: Long,
+    end: Long,
+): SpanInterval? {
+    val transition = hop.transition
+    if (!overlaps(transition, start, end)) return null
+    val startOutside = transition.startAt < start
+    val endOutside = transition.endAt > end
+    val ids = mutableListOf<String>()
+    val earlier = hop.predecessor
+    if (!startOutside && earlier != null && earlier.recordedAt in start..end) {
+        ids += earlier.stateKey.raw
+    }
+    if (!endOutside && transition.endAt in start..end) {
+        ids += transition.key.raw
+    }
+    return spanInterval(transition, hop.boundary, startOutside, endOutside, anchor, end, ids)
+}
+
+private fun projectSuccessor(
+    hop: SuccessorHop,
+    anchor: Long,
+    start: Long,
+    end: Long,
+): SpanInterval? {
+    val transition = hop.transition
+    if (!overlaps(transition, start, end)) return null
+    val startOutside = transition.startAt < start
+    val endOutside = transition.endAt > end
+    val ids = mutableListOf<String>()
+    val source = hop.source
+    if (!startOutside && source != null && source.recordedAt in start..end) {
+        ids += source.stateKey.raw
+    }
+    val successor = hop.successor
+    if (!endOutside && successor != null && successor.recordedAt in start..end) {
+        ids += successor.stateKey.raw
+    }
+    return spanInterval(transition, false, startOutside, endOutside, anchor, end, ids)
+}
+
+private fun spanInterval(
+    transition: IntervalBehaviorEvidence,
+    boundaryHop: Boolean,
+    startOutside: Boolean,
+    endOutside: Boolean,
+    anchor: Long,
+    effectiveEnd: Long,
+    ids: List<String>,
+): SpanInterval {
+    val safeIds = ids.distinct().filter { id -> !endOutside || id != transition.key.raw }
+    return SpanInterval(
+        transitionKey = transition.key,
+        startAt = transition.startAt,
+        endAt = transition.endAt,
+        startBasis = transition.startBasis,
+        boundary = boundaryHop || isBoundary(transition),
+        startOutsideSpan = startOutside,
+        endOutsideSpan = endOutside,
+        outcomeInSpan = !endOutside && transition.endAt > anchor && transition.endAt <= effectiveEnd,
+        inSpanStateIds = safeIds,
+    )
+}
+
+private fun isBoundary(transition: IntervalBehaviorEvidence): Boolean {
+    return CausalIneligibilityReason.BOUNDARY_INTERVAL in transition.eligibility.reasons
 }
 
 private fun overlaps(transition: IntervalBehaviorEvidence, start: Long, end: Long): Boolean {
@@ -477,38 +692,82 @@ fun bidirectionalAuditLabel(view: BidirectionalEvidenceView): String {
     val header = RETROSPECTIVE_MULTISCALE_BIDIRECTIONAL_EVIDENCE_PROTOCOL + "\n" +
         "focal ${focal.stateKey.raw} at $anchor\n" +
         "derived from ${view.predecessorProtocol} and ${view.successorProtocol}\n" +
-        "Retrospective only. Every span stays visible. No preferred scale.\n"
-    return header + view.candidates.joinToString("\n") { candidate -> auditCandidate(candidate) }
+        "Retrospective only. Every span stays visible. No preferred scale."
+    return header + "\n" + view.candidates.joinToString("\n") { candidate -> auditCandidate(candidate) }
 }
 
 private fun auditCandidate(candidate: BidirectionalCandidate): String {
     val span = candidate.span
-    val segments = candidate.segments.joinToString("\n") { segment ->
-        val past = segment.pastHops.joinToString("; ") { hopPhrase(it.transition) }.ifEmpty { "none" }
-        val future = segment.futureHops.joinToString("; ") { hopPhrase(it.transition) }.ifEmpty { "none" }
-        val candidates = segment.futureCandidates.joinToString(",") { it.transitionKey.raw }.ifEmpty { "none" }
-        val states = segment.statesInSpan.joinToString(",").ifEmpty { "none" }
-        "segment ${segment.rootStateId} at ${segment.rootRecordedAt}\n" +
-            "states $states\n" +
-            "past $past stop ${segment.pastStop.reason.name}\n" +
-            "future $future stop ${segment.futureReason.name} candidates $candidates"
-    }.ifEmpty { "no segments" }
-    return "span back ${span.backwardMillis} forward ${span.forwardMillis}\n" +
-        "requested ${candidate.requestedStartAt} to ${candidate.requestedEndAt}\n" +
-        "effective ${candidate.effectiveStartAt} to ${candidate.effectiveEndAt}\n" +
-        "left coverage ${candidate.leftCoverage} truncated ${candidate.leftTruncated}\n" +
-        "right coverage ${candidate.rightCoverage} censored ${candidate.rightCensored}\n" +
-        "segments ${candidate.segments.size} boundaries ${candidate.boundaryCount}\n" +
-        segments
+    val stateCount = candidate.segments.flatMap { it.statesInSpan }.distinct().size
+    val transitionCount = candidate.segments
+        .flatMap { it.pastEvidence + it.futureEvidence }
+        .map { it.transitionKey.raw }
+        .distinct()
+        .size
+    val stops = candidate.segments
+        .flatMap { listOf(it.pastReason.name, it.futureReason.name) }
+        .distinct()
+        .ifEmpty { listOf("none") }
+        .joinToString(",")
+    val summary = "left ${radius(span.backwardMillis)} right ${radius(span.forwardMillis)}" +
+        " · bounds ${candidate.requestedStartAt} to ${candidate.requestedEndAt}" +
+        " · left coverage ${formatCoverage(candidate.leftCoverage)} ${if (candidate.leftTruncated) "truncated" else "full"}" +
+        " · right coverage ${formatCoverage(candidate.rightCoverage)} ${if (candidate.rightCensored) "censored" else "open"}" +
+        " · states $stateCount transitions $transitionCount segments ${candidate.segments.size} boundaries ${candidate.boundaryCount}" +
+        " · stops $stops"
+    val segments = candidate.segments.joinToString("\n") { segmentLine(it) }
+    return if (segments.isEmpty()) summary else summary + "\n" + segments
 }
 
-private fun hopPhrase(transition: IntervalBehaviorEvidence): String {
-    val gaps = transition.eligibility.reasons.joinToString(",") { it.name }.ifEmpty { "none" }
-    val quantities = transition.exposures.joinToString(",") { exposure ->
-        "${exposure.identity.kind.name}:${exposure.identity.key}"
-    }.ifEmpty { "none" }
-    return "${transition.key.raw} ${transition.startAt} to ${transition.endAt} " +
-        "basis ${transition.startBasis} gaps $gaps quantities $quantities"
+private fun segmentLine(segment: BidirectionalSegment): String {
+    val states = segment.statesInSpan.joinToString(",")
+    val boundaries = (segment.pastEvidence + segment.futureEvidence)
+        .filter { it.boundary }
+        .map { it.transitionKey.raw }
+        .distinct()
+    val boundaryText = if (boundaries.isEmpty()) "no boundary" else "boundaries ${boundaries.joinToString(",")}"
+    val marks = (segment.pastEvidence + segment.futureEvidence).mapNotNull { boundMark(it) }
+    val candidates = if (segment.futureCandidateKeys.isEmpty()) {
+        ""
+    } else {
+        " · candidates ${segment.futureCandidateKeys.joinToString(",")}"
+    }
+    val markText = if (marks.isEmpty()) "" else " · ${marks.joinToString("; ")}"
+    return "${kindLabel(segment.kind)} · $states · ${segment.rangeStart} to ${segment.rangeEnd}" +
+        " · $boundaryText · past ${segment.pastReason.name} · future ${segment.futureReason.name}" +
+        candidates + markText
+}
+
+private fun boundMark(interval: SpanInterval): String? {
+    val parts = mutableListOf<String>()
+    if (interval.startOutsideSpan) {
+        parts += "left-truncated start outside span ${interval.transitionKey.raw}"
+    }
+    if (interval.endOutsideSpan) {
+        parts += "right-truncated end outside span ${interval.transitionKey.raw}"
+    }
+    return parts.joinToString("; ").ifEmpty { null }
+}
+
+private fun kindLabel(kind: SegmentKind): String = when (kind) {
+    SegmentKind.FOCAL_ORDERED -> "focal ordered"
+    SegmentKind.ORDERED_CONTINUATION -> "ordered continuation"
+    SegmentKind.SAMPLED_OR_DISCONNECTED -> "sampled or disconnected"
+    SegmentKind.BRANCH_LOCAL_PREDECESSOR ->
+        "branch-local predecessor, not adopted by the focal successor path"
+}
+
+private fun radius(millis: Long): String = when {
+    millis % MILLIS_PER_DAY == 0L -> "${millis / MILLIS_PER_DAY}d"
+    millis % MILLIS_PER_HOUR == 0L -> "${millis / MILLIS_PER_HOUR}h"
+    else -> "${millis}ms"
+}
+
+private fun formatCoverage(value: Double): String {
+    val thousandths = kotlin.math.round(value * 1000.0).toLong()
+    val whole = thousandths / 1000
+    val fraction = (kotlin.math.abs(thousandths % 1000)).toString().padStart(3, '0').trimEnd('0')
+    return if (fraction.isEmpty()) whole.toString() else "$whole.$fraction"
 }
 
 fun bidirectionalMissingLabel(): String = "This check-in has no retrospective multiscale bidirectional evidence."

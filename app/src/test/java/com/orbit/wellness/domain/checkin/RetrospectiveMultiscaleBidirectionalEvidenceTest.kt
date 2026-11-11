@@ -35,7 +35,18 @@ class RetrospectiveMultiscaleBidirectionalEvidenceTest {
         assertTrue(label.contains("Every span stays visible. No preferred scale."))
         assertFalse(label.contains("winner"))
         assertFalse(label.contains("coherence"))
-        assertEquals(6, Regex("span back ").findAll(label).count())
+        val summaries = label.lines().filter { it.startsWith("left ") }
+        assertEquals(6, summaries.size)
+        assertTrue(summaries.first().contains("bounds"))
+        assertTrue(summaries.first().contains("left coverage"))
+        assertTrue(summaries.first().contains("right coverage"))
+        assertTrue(summaries.first().contains("states"))
+        assertTrue(summaries.first().contains("transitions"))
+        assertTrue(summaries.first().contains("segments"))
+        assertTrue(summaries.first().contains("boundaries"))
+        assertTrue(summaries.first().contains("stops"))
+        assertFalse(label.contains("gaps "))
+        assertFalse(label.contains("quantities"))
     }
 
     @Test
@@ -115,19 +126,25 @@ class RetrospectiveMultiscaleBidirectionalEvidenceTest {
         assertEquals(listOf("d1a", "d2a", "d3a"), span.segments.map { it.rootStateId })
         assertTrue(span.boundaryCount >= 2)
         val focal = span.segments.single { it.rootStateId == "d2a" }
-        assertEquals(listOf("d2a"), focal.pastHops.map { it.transition.key.raw })
-        assertEquals(PredecessorStopReason.BOUNDARY, focal.pastStop.reason)
-        assertNull(focal.pastHops.single().predecessor)
-        assertEquals(listOf("d2b", "d3a"), focal.futureHops.map { it.transition.key.raw })
+        assertEquals(SegmentKind.FOCAL_ORDERED, focal.kind)
+        assertEquals(listOf("d2a"), focal.pastEvidence.map { it.transitionKey.raw })
+        assertEquals(PredecessorStopReason.BOUNDARY, focal.pastReason)
+        assertEquals(listOf("d2a"), focal.pastEvidence.single().inSpanStateIds)
+        assertEquals(listOf("d2b", "d3a"), focal.futureEvidence.map { it.transitionKey.raw })
         assertEquals(SuccessorStopReason.BOUNDARY_REACHED, focal.futureReason)
-        assertTrue(focal.futureHops.none { it.successor?.stateKey?.raw == "d3a" || it.successor?.stateKey?.raw == "d3b" })
+        assertTrue(focal.futureEvidence.none { it.inSpanStateIds.contains("d3a") || it.inSpanStateIds.contains("d3b") })
+        val previousDay = span.segments.single { it.rootStateId == "d1a" }
         val nextDay = span.segments.single { it.rootStateId == "d3a" }
+        assertEquals(SegmentKind.ORDERED_CONTINUATION, previousDay.kind)
+        assertEquals(SegmentKind.ORDERED_CONTINUATION, nextDay.kind)
         assertTrue(nextDay.statesInSpan.contains("d3b"))
         assertFalse(focal.statesInSpan.contains("d3b"))
         val label = bidirectionalAuditLabel(project(data, "d2a", listOf(span.span)))
-        assertTrue(label.contains("segment d1a"))
-        assertTrue(label.contains("segment d2a"))
-        assertTrue(label.contains("segment d3a"))
+        assertTrue(label.contains("focal ordered"))
+        assertTrue(label.contains("ordered continuation"))
+        assertTrue(label.contains("d1a"))
+        assertTrue(label.contains("d2a"))
+        assertTrue(label.contains("d3a"))
         assertTrue(label.contains("segments 3"))
     }
 
@@ -149,12 +166,109 @@ class RetrospectiveMultiscaleBidirectionalEvidenceTest {
         )
         val span = project(data, "a", listOf(BidirectionalSpan(DAY, DAY))).candidates.single()
         val fork = span.segments.single { it.futureReason == SuccessorStopReason.AMBIGUOUS_SUCCESSOR }
-        assertEquals(listOf("a"), fork.futureHops.map { it.transition.key.raw })
-        assertEquals(listOf("next", "wake"), fork.futureCandidates.map { it.transitionKey.raw })
-        assertTrue(fork.futureHops.none { it.successor?.stateKey?.raw == "next" || it.successor?.stateKey?.raw == "wake" })
-        val roots = span.segments.map { it.rootStateId }
-        assertTrue(roots.contains("next"))
-        assertTrue(roots.contains("wake"))
+        assertEquals(SegmentKind.FOCAL_ORDERED, fork.kind)
+        assertEquals(listOf("a"), fork.futureEvidence.map { it.transitionKey.raw })
+        assertEquals(listOf("next", "wake"), fork.futureCandidateKeys)
+        assertTrue(fork.futureEvidence.none { it.inSpanStateIds.contains("next") || it.inSpanStateIds.contains("wake") })
+        assertFalse(fork.statesInSpan.contains("next"))
+        assertFalse(fork.statesInSpan.contains("wake"))
+        val next = span.segments.single { it.rootStateId == "next" }
+        val wake = span.segments.single { it.rootStateId == "wake" }
+        assertEquals(SegmentKind.BRANCH_LOCAL_PREDECESSOR, next.kind)
+        assertEquals(SegmentKind.BRANCH_LOCAL_PREDECESSOR, wake.kind)
+        assertTrue(next.pastEvidence.any { it.inSpanStateIds.contains("a") })
+        assertFalse(wake.pastEvidence.any { it.inSpanStateIds.contains("a") })
+        val label = bidirectionalAuditLabel(project(data, "a", listOf(span.span)))
+        val focalLine = label.lines().single { it.startsWith("focal ordered") }
+        val branchLines = label.lines().filter { it.startsWith("branch-local predecessor") }
+        assertEquals(2, branchLines.size)
+        assertTrue(branchLines.all { it.contains("not adopted by the focal successor path") })
+        assertTrue(focalLine.contains("candidates next,wake"))
+        assertFalse(focalLine.contains("branch-local"))
+    }
+
+    @Test
+    fun aFutureIntervalThatEndsOutsideTheSpanStaysADepartureWithoutItsFarState() {
+        val start = 80L * DAY
+        val data = dataset(
+            states = listOf(
+                state("focal", start, mood = 2),
+                state("soon", start + 2 * HOUR, mood = 4),
+                state("late", start + 20 * HOUR, mood = 9),
+            ),
+            intervals = listOf(
+                linked("soon", "focal", start, start + 2 * HOUR),
+                linked("late", "soon", start + 2 * HOUR, start + 20 * HOUR),
+            ),
+        )
+        val span = project(data, "focal", listOf(BidirectionalSpan(6L * HOUR, 6L * HOUR))).candidates.single()
+        assertEquals(start + 6 * HOUR, span.requestedEndAt)
+        assertEquals(start + 6 * HOUR, span.effectiveEndAt)
+        val states = span.segments.flatMap { it.statesInSpan }
+        assertTrue(states.contains("soon"))
+        assertFalse(states.contains("late"))
+        val crossing = span.segments.flatMap { it.futureEvidence }.single { it.transitionKey.raw == "late" }
+        assertTrue(crossing.endOutsideSpan)
+        assertFalse(crossing.outcomeInSpan)
+        assertTrue(crossing.inSpanStateIds.contains("soon"))
+        assertFalse(crossing.inSpanStateIds.contains("late"))
+        val inside = span.segments.flatMap { it.futureEvidence }.single { it.transitionKey.raw == "soon" }
+        assertTrue(inside.outcomeInSpan)
+        val label = bidirectionalAuditLabel(project(data, "focal", listOf(span.span)))
+        assertTrue(label.contains("right-truncated end outside span late"))
+        assertFalse(label.contains("mood"))
+        assertFalse(label.contains("axes"))
+        assertNoRetainedStateValues()
+    }
+
+    @Test
+    fun aPastIntervalThatStartsOutsideTheSpanDoesNotExtendTheRadiusOrExposeThatState() {
+        val start = 90L * DAY
+        val data = dataset(
+            states = listOf(
+                state("old", start - 30 * HOUR, mood = 8),
+                state("back", start - 12 * HOUR, mood = 2),
+                state("focal", start, mood = 3),
+            ),
+            intervals = listOf(
+                linked("back", "old", start - 30 * HOUR, start - 12 * HOUR),
+                linked("focal", "back", start - 12 * HOUR, start),
+            ),
+        )
+        val span = project(data, "focal", listOf(BidirectionalSpan(24L * HOUR, 6L * HOUR))).candidates.single()
+        assertEquals(start - 24 * HOUR, span.requestedStartAt)
+        assertEquals(start - 24 * HOUR, span.effectiveStartAt)
+        assertFalse(span.segments.flatMap { it.statesInSpan }.contains("old"))
+        assertFalse(span.segments.any { it.rootStateId == "old" })
+        val crossing = span.segments
+            .flatMap { it.pastEvidence + it.futureEvidence }
+            .single { it.transitionKey.raw == "back" }
+        assertTrue(crossing.startOutsideSpan)
+        assertTrue(crossing.inSpanStateIds.contains("back"))
+        assertFalse(crossing.inSpanStateIds.contains("old"))
+        val label = bidirectionalAuditLabel(project(data, "focal", listOf(span.span)))
+        assertTrue(label.contains("left-truncated start outside span back"))
+        assertFalse(label.contains("mood"))
+        assertFalse(label.contains("axes"))
+        assertNoRetainedStateValues()
+    }
+
+    @Test
+    fun anUnlinkedCheckInInTheWindowStaysSampledRatherThanFocalContinuation() {
+        val start = 100L * DAY
+        val data = dataset(
+            states = listOf(
+                state("focal", start, mood = 2),
+                state("side", start + 3 * HOUR, mood = 4),
+            ),
+            intervals = emptyList(),
+        )
+        val span = project(data, "focal", listOf(BidirectionalSpan(6L * HOUR, 6L * HOUR))).candidates.single()
+        assertEquals(SegmentKind.FOCAL_ORDERED, span.segments.single { it.rootStateId == "focal" }.kind)
+        assertEquals(SegmentKind.SAMPLED_OR_DISCONNECTED, span.segments.single { it.rootStateId == "side" }.kind)
+        val label = bidirectionalAuditLabel(project(data, "focal", listOf(span.span)))
+        assertTrue(label.contains("focal ordered"))
+        assertTrue(label.contains("sampled or disconnected"))
     }
 
     @Test
@@ -285,6 +399,19 @@ class RetrospectiveMultiscaleBidirectionalEvidenceTest {
             diet = DietCategoryObservationV2(CategoryObservationKindV2.NONE, endAt, emptyList()),
             usage = UsageCategoryObservationV2(CategoryObservationKindV2.NONE, endAt, emptyList()),
         )
+
+    private fun assertNoRetainedStateValues() {
+        val names = listOf(BidirectionalSegment::class.java, SpanInterval::class.java)
+            .flatMap { type -> type.declaredFields.map { it.genericType.typeName } }
+        assertTrue(names.none { name ->
+            name.contains("SuccessorHop") ||
+                name.contains("PredecessorHop") ||
+                name.contains("SuccessorStateView") ||
+                name.contains("PredecessorStateView") ||
+                name.contains("FocalAxisCoverage") ||
+                name.contains("IntervalBehaviorEvidence")
+        })
+    }
 
     private fun source(vararg paths: String) = paths.map { File(it) }.first { it.isFile }
 
