@@ -150,8 +150,9 @@ class RetrospectiveSuccessorNeighborhoodTest {
         assertEquals(SuccessorStopReason.DISCONNECTED_AT_BOUNDARY, neighborhood.stop.reason)
         assertTrue(neighborhood.observableCutoffAt!! > checkNotNull(neighborhood.hops.last().successor).recordedAt)
         val compact = successorCompactLabel(neighborhood)
-        assertTrue(compact.contains("No graph-linked successor. Later sampled records exist."))
+        assertTrue(compact.contains("No graph-linked successor. The next recorded check-in is a wake or day start."))
         assertFalse(compact.contains("Nothing recorded later"))
+        assertFalse(compact.contains("Later sampled records exist"))
         val sixHours = neighborhood.windows.single { it.scale == SuccessorWindowScale.FOLLOWING_6_HOURS }
         assertEquals(listOf("day", "mid", "woken"), sixHours.choices.intervals.map { it.key.raw }.sorted())
         assertTrue(sixHours.outcomes.intervals.map { it.key.raw }.containsAll(listOf("woken", "day")))
@@ -181,7 +182,7 @@ class RetrospectiveSuccessorNeighborhoodTest {
     }
 
     @Test
-    fun aGraphLinkedWakeRemainsAnOutgoingEdge() {
+    fun aLinkedBoundaryIsTheTerminalHopWhenItIsTheFinalRecord() {
         val start = 34L * DAY
         val neighborhood = project(
             dataset(
@@ -197,10 +198,149 @@ class RetrospectiveSuccessorNeighborhoodTest {
             ),
         ).neighborhood("mid")
         assertEquals(listOf("mid", "woken"), neighborhood.hops.map { it.transition.key.raw })
+        assertEquals("mid", neighborhood.hops.last().source?.stateKey?.raw)
         assertEquals(CheckInContextStartBasis.WAKE_TIME, neighborhood.hops.last().transition.startBasis)
-        assertEquals("woken", neighborhood.hops.last().successor?.stateKey?.raw)
-        assertEquals(true, neighborhood.hops.last().successor?.emotionPresent)
-        assertEquals(SuccessorStopReason.END_OF_RECORDED_HISTORY, neighborhood.stop.reason)
+        assertNull(neighborhood.hops.last().successor)
+        assertTrue(neighborhood.hops.none { it.successor?.stateKey?.raw == "woken" })
+        assertEquals(SuccessorStopReason.BOUNDARY_REACHED, neighborhood.stop.reason)
+        assertEquals("woken", neighborhood.stop.stoppingTransitionKey?.raw)
+        val compact = successorCompactLabel(neighborhood)
+        assertTrue(compact.contains("Graph-linked wake or day start stops the ordered path."))
+        assertFalse(compact.contains("Nothing recorded later"))
+        val sixHours = neighborhood.windows.single { it.scale == SuccessorWindowScale.FOLLOWING_6_HOURS }
+        assertTrue(sixHours.outcomes.intervals.map { it.key.raw }.contains("woken"))
+    }
+
+    @Test
+    fun aLinkedBoundaryStopsThePathWhileSampledWindowsKeepTheNextSegment() {
+        val start = 36L * DAY
+        val neighborhood = project(
+            dataset(
+                states = listOf(
+                    state("origin", start, mood = 1),
+                    state("mid", start + HOUR, mood = 2),
+                    state("woken", start + 3 * HOUR, mood = 3, emotion = "steady"),
+                    state("next", start + 4 * HOUR, mood = 8),
+                ),
+                intervals = listOf(
+                    linked("mid", "origin", start, start + HOUR),
+                    boundary("woken", "mid", start + HOUR, start + 3 * HOUR, CheckInContextStartBasis.WAKE_TIME),
+                    linked("next", "woken", start + 3 * HOUR, start + 4 * HOUR),
+                ),
+            ),
+        ).neighborhood("mid")
+        assertEquals(listOf("mid", "woken"), neighborhood.hops.map { it.transition.key.raw })
+        assertNull(neighborhood.hops.last().successor)
+        assertTrue(neighborhood.hops.none { it.transition.key.raw == "next" || it.successor?.stateKey?.raw == "next" })
+        assertTrue(neighborhood.hops.none { it.successor?.stateKey?.raw == "woken" })
+        assertEquals(SuccessorStopReason.BOUNDARY_REACHED, neighborhood.stop.reason)
+        assertEquals("woken", neighborhood.stop.stoppingTransitionKey?.raw)
+        val sixHours = neighborhood.windows.single { it.scale == SuccessorWindowScale.FOLLOWING_6_HOURS }
+        assertTrue(sixHours.choices.intervals.map { it.key.raw }.containsAll(listOf("woken", "next")))
+        assertTrue(sixHours.outcomes.intervals.map { it.key.raw }.containsAll(listOf("woken", "next")))
+    }
+
+    @Test
+    fun aSelectedBoundaryStopsAtDepthOne() {
+        val start = 37L * DAY
+        val neighborhood = project(
+            dataset(
+                states = listOf(
+                    state("origin", start, mood = 1),
+                    state("woken", start + 2 * HOUR, mood = 4, emotion = "awake"),
+                    state("next", start + 4 * HOUR, mood = 6),
+                ),
+                intervals = listOf(
+                    boundary("woken", "origin", start, start + 2 * HOUR, CheckInContextStartBasis.DAY_START),
+                    linked("next", "woken", start + 2 * HOUR, start + 4 * HOUR),
+                ),
+            ),
+        ).neighborhood("woken")
+        assertEquals(listOf("woken"), neighborhood.hops.map { it.transition.key.raw })
+        assertNull(neighborhood.focal)
+        assertNull(neighborhood.hops.single().successor)
+        assertEquals(1, neighborhood.stop.depth)
+        assertEquals(SuccessorStopReason.BOUNDARY_REACHED, neighborhood.stop.reason)
+        assertEquals("woken", neighborhood.stop.stoppingTransitionKey?.raw)
+        assertTrue(successorCompactLabel(neighborhood).contains("ending state not adopted"))
+        val sixHours = neighborhood.windows.single { it.scale == SuccessorWindowScale.FOLLOWING_6_HOURS }
+        assertTrue(sixHours.outcomes.intervals.map { it.key.raw }.contains("next"))
+    }
+
+    @Test
+    fun anOrdinaryLaterRecordIsNotRelabeledByABoundaryAfterIt() {
+        val start = 38L * DAY
+        val neighborhood = project(
+            dataset(
+                states = listOf(
+                    state("origin", start, mood = 1),
+                    state("end", start + HOUR, mood = 2),
+                    state("other", start, mood = 3),
+                    state("later", start + 3 * HOUR, mood = 4),
+                    state("morning", start + 5 * HOUR, mood = 5),
+                ),
+                intervals = listOf(
+                    linked("end", "origin", start, start + HOUR),
+                    linked("later", "other", start, start + 3 * HOUR),
+                    boundary("morning", "later", start + 3 * HOUR, start + 5 * HOUR, CheckInContextStartBasis.DAY_START),
+                ),
+            ),
+        ).neighborhood("end")
+        assertEquals(listOf("end"), neighborhood.hops.map { it.transition.key.raw })
+        assertEquals(SuccessorStopReason.NO_GRAPH_LINKED_SUCCESSOR, neighborhood.stop.reason)
+        assertTrue(successorCompactLabel(neighborhood).contains("No graph-linked successor. Later sampled records exist."))
+        assertFalse(successorCompactLabel(neighborhood).contains("wake or day start"))
+    }
+
+    @Test
+    fun anUnlinkedBoundarySeparatingTheNextSegmentStaysDisconnected() {
+        val start = 39L * DAY
+        val neighborhood = project(
+            dataset(
+                states = listOf(
+                    state("origin", start, mood = 1),
+                    state("end", start + HOUR, mood = 2),
+                    state("woken", start + 3 * HOUR, mood = 3),
+                    state("after", start + 5 * HOUR, mood = 4),
+                ),
+                intervals = listOf(
+                    linked("end", "origin", start, start + HOUR),
+                    boundary("woken", null, start + HOUR, start + 3 * HOUR, CheckInContextStartBasis.WAKE_TIME),
+                    linked("after", "woken", start + 3 * HOUR, start + 5 * HOUR),
+                ),
+            ),
+        ).neighborhood("end")
+        assertEquals(listOf("end"), neighborhood.hops.map { it.transition.key.raw })
+        assertEquals(SuccessorStopReason.DISCONNECTED_AT_BOUNDARY, neighborhood.stop.reason)
+        assertTrue(
+            successorCompactLabel(neighborhood).contains(
+                "The next recorded check-in is a wake or day start.",
+            ),
+        )
+        val sixHours = neighborhood.windows.single { it.scale == SuccessorWindowScale.FOLLOWING_6_HOURS }
+        assertTrue(sixHours.choices.intervals.map { it.key.raw }.containsAll(listOf("woken", "after")))
+        assertTrue(sixHours.outcomes.intervals.map { it.key.raw }.containsAll(listOf("woken", "after")))
+    }
+
+    @Test
+    fun anInvalidBoundaryIsNotAdoptedAsBoundaryReached() {
+        val start = 41L * DAY
+        val neighborhood = project(
+            dataset(
+                states = listOf(
+                    state("origin", start, mood = 1),
+                    state("late", start + 5 * HOUR, mood = 8),
+                    state("early", start + HOUR, mood = 2),
+                ),
+                intervals = listOf(
+                    linked("late", "origin", start, start + 5 * HOUR),
+                    boundary("early", "late", start, start + HOUR, CheckInContextStartBasis.WAKE_TIME),
+                ),
+            ),
+        ).neighborhood("late")
+        assertEquals(listOf("late"), neighborhood.hops.map { it.transition.key.raw })
+        assertEquals(SuccessorStopReason.INVALID_CHRONOLOGY, neighborhood.stop.reason)
+        assertEquals("early", neighborhood.stop.stoppingTransitionKey?.raw)
     }
 
     @Test
@@ -466,7 +606,7 @@ class RetrospectiveSuccessorNeighborhoodTest {
         assertFalse(replay.contains("horizonHours"))
         assertFalse(replay.contains("projectExpertHorizon"))
         val architecture = source("docs/architecture.md", "../docs/architecture.md").readText()
-        assertTrue(architecture.contains("retrospective-successor-neighborhood-v1"))
+        assertTrue(architecture.contains("retrospective-successor-neighborhood-v2"))
         assertTrue(architecture.contains("bidirectional-smoothed-state"))
     }
 
