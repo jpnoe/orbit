@@ -32,6 +32,7 @@ import com.orbit.wellness.domain.checkin.ForecastExampleSummary
 import com.orbit.wellness.domain.checkin.BidirectionalEvidenceDataset
 import com.orbit.wellness.domain.checkin.CausalPredecessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDataset
+import com.orbit.wellness.domain.checkin.bidirectionalAuditDetail
 import com.orbit.wellness.domain.checkin.bidirectionalAuditLabel
 import com.orbit.wellness.domain.checkin.bidirectionalMissingLabel
 import com.orbit.wellness.domain.checkin.successorCompactLabel
@@ -718,7 +719,16 @@ private fun BidirectionalEvidenceSection(
     }
     if (!open) return
     val view = evidence.forFocal(focalStateId)
-    Text(if (view.focal == null) bidirectionalMissingLabel() else bidirectionalAuditLabel(view))
+    if (view.focal == null) {
+        Text(bidirectionalMissingLabel())
+        return
+    }
+    Text(bidirectionalAuditLabel(view))
+    var detail by remember(focalStateId) { mutableStateOf(false) }
+    TextButton(onClick = { detail = !detail }) {
+        Text("Alias index")
+    }
+    if (detail) Text(bidirectionalAuditDetail(view))
 }
 
 @Composable

@@ -13,7 +13,9 @@ import kotlin.math.max
  * waking segment. An ambiguous fork is not assigned to one of its branches.
  * The published span keeps interval identity and in-span endpoints. It does
  * not retain the predecessor or successor hop, so a crossing interval cannot
- * carry a state value from outside the requested radius.
+ * carry a state value from outside the requested radius. A transition key
+ * that names an ending check-in outside the span is interval identity only.
+ * Comparison reads states through span membership and does not resolve that key.
  */
 const val RETROSPECTIVE_MULTISCALE_BIDIRECTIONAL_EVIDENCE_PROTOCOL =
     "retrospective-multiscale-bidirectional-evidence-v1"
@@ -31,6 +33,10 @@ const val RETROSPECTIVE_MULTISCALE_BIDIRECTIONAL_EVIDENCE_ASSUMPTIONS =
         "Right coverage is censored at the latest stored check-in. " +
         "The two sides use their own radii. Every requested span stays visible. " +
         "An interval that crosses a span bound stays identified, and the state beyond that bound is not carried on the hop. " +
+        "A transition key that names an ending check-in outside the span is interval identity only. " +
+        "Comparison reads state membership from the span and does not resolve that key to a state or to state values. " +
+        "Compact audit text uses one alias list for the whole view and anchor-relative times. " +
+        "Canonical ids and exact timestamps stay on the audit index. " +
         "No span is preferred. Coherence, stability, penalties, clusters, activity effects, and recommendations are not computed."
 
 private const val MILLIS_PER_HOUR = 3_600_000L
@@ -109,6 +115,7 @@ data class BidirectionalEvidenceView(
     val focal: PredecessorStateView?,
     val anchorAt: Long?,
     val candidates: List<BidirectionalCandidate>,
+    val auditIndex: BidirectionalAuditIndex = BidirectionalAuditIndex(),
 ) {
     init {
         require(protocol == RETROSPECTIVE_MULTISCALE_BIDIRECTIONAL_EVIDENCE_PROTOCOL)
@@ -120,6 +127,23 @@ data class BidirectionalEvidenceView(
         require(successorProtocol == RETROSPECTIVE_SUCCESSOR_NEIGHBORHOOD_PROTOCOL)
         require(focal == null || anchorAt == focal.recordedAt)
         require(candidates.all { it.anchorAt == anchorAt && it.focal == focal })
+        require(focal == null || auditIndex.stateAlias(focalStateId) == FOCAL_STATE_ALIAS)
+        val memberIds = candidates.flatMap { candidate -> candidate.segments.flatMap { it.statesInSpan } }
+        require(memberIds.all { id ->
+            auditIndex.records.any { record ->
+                record.kind == AuditRecordKind.STATE && record.canonicalId == id
+            }
+        })
+        val intervalIds = candidates.flatMap { candidate ->
+            candidate.segments.flatMap { segment ->
+                (segment.pastEvidence + segment.futureEvidence).map { it.transitionKey.raw } + segment.futureCandidateKeys
+            }
+        }
+        require(intervalIds.all { id ->
+            auditIndex.records.any { record ->
+                record.kind != AuditRecordKind.STATE && record.canonicalId == id
+            }
+        })
     }
 }
 
@@ -161,7 +185,15 @@ data class BidirectionalCandidate(
         require(
             segments == segments.sortedWith(compareBy({ it.rangeStart }, { it.rootStateId })),
         )
+        val members = segments.flatMap { it.statesInSpan }.toSet()
+        require(segments.flatMap { it.pastEvidence + it.futureEvidence }.filter { it.endOutsideSpan }.none { interval ->
+            interval.transitionKey.raw in members
+        })
     }
+
+    /** Membership id when this span lists [stateId]. An outside ending check-in resolves to null. */
+    fun comparableState(stateId: String): String? =
+        stateId.takeIf { segments.any { stateId in it.statesInSpan } }
 }
 
 enum class SegmentKind {
@@ -171,11 +203,58 @@ enum class SegmentKind {
     BRANCH_LOCAL_PREDECESSOR,
 }
 
+const val FOCAL_STATE_ALIAS = "S00*"
+
+enum class AuditRecordKind {
+    STATE,
+    TRANSITION,
+    BOUNDARY,
+}
+
+/**
+ * Canonical id and exact timestamps for one alias.
+ * Compact audit text uses [alias]. This record is the detailed metadata.
+ */
+data class AuditRecord(
+    val alias: String,
+    val kind: AuditRecordKind,
+    val canonicalId: String,
+    val recordedAt: Long?,
+    val startAt: Long?,
+    val endAt: Long?,
+) {
+    init {
+        require(kind != AuditRecordKind.STATE || recordedAt != null)
+        require(kind == AuditRecordKind.STATE || (startAt != null && endAt != null))
+    }
+}
+
+data class BidirectionalAuditIndex(
+    val records: List<AuditRecord> = emptyList(),
+) {
+    init {
+        require(records.map { it.alias }.distinct().size == records.size)
+        val states = records.filter { it.kind == AuditRecordKind.STATE }
+        require(states.map { it.canonicalId }.distinct().size == states.size)
+        val intervals = records.filter { it.kind != AuditRecordKind.STATE }
+        require(intervals.map { it.canonicalId }.distinct().size == intervals.size)
+    }
+
+    fun stateAlias(canonicalId: String): String =
+        records.single { it.kind == AuditRecordKind.STATE && it.canonicalId == canonicalId }.alias
+
+    fun intervalAlias(canonicalId: String): String =
+        records.single { it.kind != AuditRecordKind.STATE && it.canonicalId == canonicalId }.alias
+
+    fun record(alias: String): AuditRecord = records.single { it.alias == alias }
+}
+
 /**
  * One interval as seen inside a requested span.
  *
- * [transitionKey] names the interval. When [endOutsideSpan] is set, that key
- * is the check-in beyond the right bound and is not an in-span state. This
+ * [transitionKey] names the interval. When the ending check-in lies outside
+ * the span, that key is still the interval's identity and is not a member
+ * state. [openToComparison] is the read a later comparison may use. This
  * type has no axis values, emotion, or predecessor or successor state view.
  */
 data class SpanInterval(
@@ -194,6 +273,9 @@ data class SpanInterval(
         require(!endOutsideSpan || !outcomeInSpan)
         require(!endOutsideSpan || transitionKey.raw !in inSpanStateIds)
     }
+
+    /** True only for an endpoint this span lists. The transition key is not admitted by itself. */
+    fun openToComparison(stateId: String): Boolean = stateId in inSpanStateIds
 }
 
 data class BidirectionalSegment(
@@ -271,6 +353,7 @@ private fun viewFor(
         focal = focal,
         anchorAt = anchor,
         candidates = candidates,
+        auditIndex = auditIndex(focalStateId, candidates, prepared),
     )
 }
 
@@ -690,13 +773,33 @@ fun bidirectionalAuditLabel(view: BidirectionalEvidenceView): String {
         return "This check-in has no retrospective multiscale bidirectional evidence."
     }
     val header = RETROSPECTIVE_MULTISCALE_BIDIRECTIONAL_EVIDENCE_PROTOCOL + "\n" +
-        "focal ${focal.stateKey.raw} at $anchor\n" +
+        "focal ${view.auditIndex.stateAlias(focal.stateKey.raw)}\n" +
         "derived from ${view.predecessorProtocol} and ${view.successorProtocol}\n" +
         "Retrospective only. Every span stays visible. No preferred scale."
-    return header + "\n" + view.candidates.joinToString("\n") { candidate -> auditCandidate(candidate) }
+    return header + "\n" + view.candidates.joinToString("\n") { candidate ->
+        auditCandidate(candidate, view.auditIndex)
+    }
 }
 
-private fun auditCandidate(candidate: BidirectionalCandidate): String {
+fun bidirectionalAuditDetail(view: BidirectionalEvidenceView): String {
+    if (view.focal == null || view.anchorAt == null) return bidirectionalMissingLabel()
+    val header = "Canonical ids and exact timestamps. " +
+        "A transition key names an interval. " +
+        "When its ending check-in is outside a span, comparison cannot resolve that id to a state."
+    val lines = view.auditIndex.records.joinToString("\n") { record ->
+        when (record.kind) {
+            AuditRecordKind.STATE ->
+                "${record.alias} state ${record.canonicalId} at ${record.recordedAt}"
+            AuditRecordKind.TRANSITION ->
+                "${record.alias} transition ${record.canonicalId} ${record.startAt} to ${record.endAt}"
+            AuditRecordKind.BOUNDARY ->
+                "${record.alias} boundary ${record.canonicalId} ${record.startAt} to ${record.endAt}"
+        }
+    }
+    return header + "\n" + lines
+}
+
+private fun auditCandidate(candidate: BidirectionalCandidate, index: BidirectionalAuditIndex): String {
     val span = candidate.span
     val stateCount = candidate.segments.flatMap { it.statesInSpan }.distinct().size
     val transitionCount = candidate.segments
@@ -710,43 +813,171 @@ private fun auditCandidate(candidate: BidirectionalCandidate): String {
         .ifEmpty { listOf("none") }
         .joinToString(",")
     val summary = "left ${radius(span.backwardMillis)} right ${radius(span.forwardMillis)}" +
-        " · bounds ${candidate.requestedStartAt} to ${candidate.requestedEndAt}" +
+        " · bounds ${relative(candidate.requestedStartAt, candidate.anchorAt)} to ${relative(candidate.requestedEndAt, candidate.anchorAt)}" +
         " · left coverage ${formatCoverage(candidate.leftCoverage)} ${if (candidate.leftTruncated) "truncated" else "full"}" +
         " · right coverage ${formatCoverage(candidate.rightCoverage)} ${if (candidate.rightCensored) "censored" else "open"}" +
         " · states $stateCount transitions $transitionCount segments ${candidate.segments.size} boundaries ${candidate.boundaryCount}" +
         " · stops $stops"
-    val segments = candidate.segments.joinToString("\n") { segmentLine(it) }
+    val segments = candidate.segments.joinToString("\n") { segmentLine(it, candidate.anchorAt, index) }
     return if (segments.isEmpty()) summary else summary + "\n" + segments
 }
 
-private fun segmentLine(segment: BidirectionalSegment): String {
-    val states = segment.statesInSpan.joinToString(",")
+private fun segmentLine(
+    segment: BidirectionalSegment,
+    anchor: Long,
+    index: BidirectionalAuditIndex,
+): String {
+    val states = segment.statesInSpan.joinToString(",") { index.stateAlias(it) }
     val boundaries = (segment.pastEvidence + segment.futureEvidence)
         .filter { it.boundary }
-        .map { it.transitionKey.raw }
+        .map { index.intervalAlias(it.transitionKey.raw) }
         .distinct()
     val boundaryText = if (boundaries.isEmpty()) "no boundary" else "boundaries ${boundaries.joinToString(",")}"
-    val marks = (segment.pastEvidence + segment.futureEvidence).mapNotNull { boundMark(it) }
+    val marks = (segment.pastEvidence + segment.futureEvidence).mapNotNull { boundMark(it, anchor, index) }
     val candidates = if (segment.futureCandidateKeys.isEmpty()) {
         ""
     } else {
-        " · candidates ${segment.futureCandidateKeys.joinToString(",")}"
+        " · candidates ${segment.futureCandidateKeys.joinToString(",") { index.intervalAlias(it) }}"
     }
     val markText = if (marks.isEmpty()) "" else " · ${marks.joinToString("; ")}"
-    return "${kindLabel(segment.kind)} · $states · ${segment.rangeStart} to ${segment.rangeEnd}" +
+    val range = "${relative(segment.rangeStart, anchor)} to ${relative(segment.rangeEnd, anchor)} " +
+        "(${unsignedDuration(segment.rangeEnd - segment.rangeStart)})"
+    return "${kindLabel(segment.kind)} · $states · $range" +
         " · $boundaryText · past ${segment.pastReason.name} · future ${segment.futureReason.name}" +
         candidates + markText
 }
 
-private fun boundMark(interval: SpanInterval): String? {
+private fun boundMark(
+    interval: SpanInterval,
+    anchor: Long,
+    index: BidirectionalAuditIndex,
+): String? {
+    val alias = index.intervalAlias(interval.transitionKey.raw)
+    val span = "${relative(interval.startAt, anchor)} to ${relative(interval.endAt, anchor)} " +
+        "(${unsignedDuration(interval.endAt - interval.startAt)})"
     val parts = mutableListOf<String>()
-    if (interval.startOutsideSpan) {
-        parts += "left-truncated start outside span ${interval.transitionKey.raw}"
-    }
-    if (interval.endOutsideSpan) {
-        parts += "right-truncated end outside span ${interval.transitionKey.raw}"
-    }
+    if (interval.startOutsideSpan) parts += "left-truncated start outside span $alias $span"
+    if (interval.endOutsideSpan) parts += "right-truncated end outside span $alias $span"
     return parts.joinToString("; ").ifEmpty { null }
+}
+
+private fun auditIndex(
+    focalStateId: String,
+    candidates: List<BidirectionalCandidate>,
+    prepared: PreparedEvidence,
+): BidirectionalAuditIndex {
+    val times = prepared.graph.states.associate { it.id to it.state.recordedAt }
+    val members = candidates.flatMap { candidate -> candidate.segments.flatMap { it.statesInSpan } }.toSet()
+    val others = (members - focalStateId).sortedWith(compareBy({ times.getValue(it) }, { it }))
+    val stateRecords = buildList {
+        add(
+            AuditRecord(
+                alias = FOCAL_STATE_ALIAS,
+                kind = AuditRecordKind.STATE,
+                canonicalId = focalStateId,
+                recordedAt = times.getValue(focalStateId),
+                startAt = null,
+                endAt = null,
+            ),
+        )
+        others.forEachIndexed { index, id ->
+            add(
+                AuditRecord(
+                    alias = numbered("S", index + 1),
+                    kind = AuditRecordKind.STATE,
+                    canonicalId = id,
+                    recordedAt = times.getValue(id),
+                    startAt = null,
+                    endAt = null,
+                ),
+            )
+        }
+    }
+    val intervals = linkedMapOf<String, IntervalDraft>()
+    candidates.forEach { candidate ->
+        candidate.segments.forEach { segment ->
+            (segment.pastEvidence + segment.futureEvidence).forEach { interval ->
+                val id = interval.transitionKey.raw
+                val existing = intervals[id]
+                intervals[id] = IntervalDraft(
+                    id = id,
+                    startAt = interval.startAt,
+                    endAt = interval.endAt,
+                    boundary = existing?.boundary == true || interval.boundary,
+                )
+            }
+            segment.futureCandidateKeys.forEach { key ->
+                if (key in intervals) return@forEach
+                val node = prepared.graph.transitions.single { it.id == key }
+                val boundary = prepared.evidence.any { row ->
+                    row.key.raw == key && CausalIneligibilityReason.BOUNDARY_INTERVAL in row.eligibility.reasons
+                }
+                intervals[key] = IntervalDraft(
+                    id = key,
+                    startAt = node.interval.windowStartAt,
+                    endAt = node.interval.windowEndAt,
+                    boundary = boundary,
+                )
+            }
+        }
+    }
+    val boundaries = intervals.values.filter { it.boundary }
+        .sortedWith(compareBy({ it.startAt }, { it.endAt }, { it.id }))
+    val transitions = intervals.values.filter { !it.boundary }
+        .sortedWith(compareBy({ it.startAt }, { it.endAt }, { it.id }))
+    val intervalRecords = boundaries.mapIndexed { index, interval ->
+        AuditRecord(
+            alias = numbered("B", index + 1),
+            kind = AuditRecordKind.BOUNDARY,
+            canonicalId = interval.id,
+            recordedAt = null,
+            startAt = interval.startAt,
+            endAt = interval.endAt,
+        )
+    } + transitions.mapIndexed { index, interval ->
+        AuditRecord(
+            alias = numbered("T", index + 1),
+            kind = AuditRecordKind.TRANSITION,
+            canonicalId = interval.id,
+            recordedAt = null,
+            startAt = interval.startAt,
+            endAt = interval.endAt,
+        )
+    }
+    return BidirectionalAuditIndex(stateRecords + intervalRecords)
+}
+
+private data class IntervalDraft(
+    val id: String,
+    val startAt: Long,
+    val endAt: Long,
+    val boundary: Boolean,
+)
+
+private fun numbered(prefix: String, number: Int): String = prefix + number.toString().padStart(2, '0')
+
+private fun relative(at: Long, anchor: Long): String = formatDelta(at - anchor)
+
+private fun unsignedDuration(millis: Long): String = formatDelta(millis).removePrefix("+")
+
+private fun formatDelta(delta: Long): String {
+    if (delta == 0L) return "0"
+    if (delta == Long.MIN_VALUE) return "${delta}ms"
+    val sign = if (delta < 0) "-" else "+"
+    var rest = if (delta < 0) -delta else delta
+    val days = rest / MILLIS_PER_DAY
+    rest %= MILLIS_PER_DAY
+    val hours = rest / MILLIS_PER_HOUR
+    rest %= MILLIS_PER_HOUR
+    val minutes = rest / 60_000L
+    rest %= 60_000L
+    val body = buildString {
+        if (days > 0) append("${days}d")
+        if (hours > 0) append("${hours}h")
+        if (minutes > 0) append("${minutes}m")
+        if (rest > 0) append("${rest}ms")
+    }
+    return sign + body.ifEmpty { "0" }
 }
 
 private fun kindLabel(kind: SegmentKind): String = when (kind) {
