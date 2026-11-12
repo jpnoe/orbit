@@ -18,8 +18,9 @@ import kotlin.math.abs
  * [InclusiveWakingSegmentSummary] describes the segments and may include the focal
  * reading. [LeaveOneOutFocalReference] judges the focal reading and excludes it.
  * The inclusive slope stays the median pairwise slope of the whole focal segment.
- * The focal residual refits that line without the focal reading, evaluates it at
- * the focal timestamp, and subtracts the prediction from the observed value.
+ * The leave-one-out trend residual refits that line without the focal reading,
+ * evaluates it at the focal timestamp, and subtracts the prediction from the
+ * observed value. It is separate from a Null or bounded-forecast residual.
  *
  * This pass does not score a shape, pick a scale, or feed a forecast.
  */
@@ -35,9 +36,10 @@ const val RETROSPECTIVE_STATE_SHAPE_DIAGNOSTICS_ASSUMPTIONS =
         "Leave-one-out references exclude the focal check-in. " +
         "The inclusive segment median, segment-balanced median, and segment slope include the residents of each waking segment. " +
         "Those inclusive summaries are descriptions. They are not evidence about the focal point. " +
-        "The focal residual refits the median pairwise line without the focal reading and subtracts its value at the focal timestamp. " +
+        "The leave-one-out trend residual refits the median pairwise line without the focal reading and subtracts its value at the focal timestamp. " +
+        "That trend residual is separate from a Null or bounded-forecast residual. " +
         "Incoming and outgoing slopes include the focal reading only as an endpoint. " +
-        "A slope or residual is unavailable when fewer than two distinct timestamps remain. " +
+        "A slope or trend residual is unavailable when fewer than two distinct timestamps remain. " +
         "A deviation is unavailable when fewer than two values remain. " +
         "An admitted state is a resident of one segment, predecessor context, or ambiguous. " +
         "Emotion labels are counted and are not placed on a number line. " +
@@ -193,20 +195,21 @@ data class InclusiveWakingSegmentSummary(
 
 /**
  * References that judge the focal reading. Every value is computed without that reading.
- * [residual] is the focal observation minus the robust line fit to the other residents
- * of the focal waking segment, evaluated at the focal timestamp.
+ * [trendResidual] is the focal observation minus the others-only local waking-segment
+ * trend prediction, evaluated at the focal timestamp. It is separate from the Null
+ * learner's residual, which is an actual ending value minus a bounded forecast.
  */
 data class LeaveOneOutFocalReference(
     val stateMedian: Double?,
     val stateMad: Double?,
     val distance: Double?,
-    val residual: Double?,
+    val trendResidual: Double?,
 ) {
     init {
         require(stateMedian == null || stateMedian.isFinite())
         require(stateMad == null || stateMad >= 0.0)
         require(distance == null || distance >= 0.0)
-        require(residual == null || residual.isFinite())
+        require(trendResidual == null || trendResidual.isFinite())
     }
 }
 
@@ -223,7 +226,7 @@ data class AxisShapeDiagnostic(
         require(recordedStateCount >= 0)
         require(wakingSegmentCount == inclusive.levels.size)
         require(focalValue == null || focalValue.isFinite())
-        require(leaveOneOut.residual == null || inclusive.slope != null)
+        require(leaveOneOut.trendResidual == null || inclusive.slope != null)
         if (focalValue != null && leaveOneOut.stateMedian != null) {
             require(leaveOneOut.distance == abs(focalValue - leaveOneOut.stateMedian))
         } else {
@@ -387,7 +390,7 @@ private fun diagnoseAxis(
             slope = pairwiseSlope(full),
             incomingSlope = pairwiseSlope(incoming),
             outgoingSlope = pairwiseSlope(outgoing),
-            residual = if (focalValue == null) null else leaveOneOutResidual(others, focalMember.at, focalValue),
+            trendResidual = if (focalValue == null) null else leaveOneOutTrendResidual(others, focalMember.at, focalValue),
         )
     } else {
         InclusiveSlopes(null, null, null, null)
@@ -401,7 +404,7 @@ private fun diagnoseAxis(
             stateMedian = stateMedian,
             stateMad = stateMad,
             distance = if (focalValue != null && stateMedian != null) abs(focalValue - stateMedian) else null,
-            residual = inclusiveSlopes.residual,
+            trendResidual = inclusiveSlopes.trendResidual,
         ),
         inclusive = InclusiveWakingSegmentSummary(
             levels = levels,
@@ -418,7 +421,7 @@ private data class InclusiveSlopes(
     val slope: Double?,
     val incomingSlope: Double?,
     val outgoingSlope: Double?,
-    val residual: Double?,
+    val trendResidual: Double?,
 )
 
 private fun diagnosticMedian(values: List<Double>): Double? {
@@ -442,7 +445,7 @@ private fun pairwiseSlope(points: List<TimedValue>): Double? {
     return diagnosticMedian(slopes)
 }
 
-private fun leaveOneOutResidual(others: List<TimedValue>, focalAt: Long, focalValue: Double): Double? {
+private fun leaveOneOutTrendResidual(others: List<TimedValue>, focalAt: Long, focalValue: Double): Double? {
     val slope = pairwiseSlope(others) ?: return null
     val predicted = diagnosticMedian(collapse(others).map { point ->
         val hours = (point.at - focalAt).toDouble() / MILLIS_PER_HOUR.toDouble()
@@ -496,7 +499,7 @@ private fun auditAxis(axis: AxisShapeDiagnostic): String {
         " · balanced ${measurement(axis.inclusive.balancedMedian)}" +
         " · spread ${measurement(axis.inclusive.medianSpread)}\n" +
         "inclusive slope ${measurement(axis.inclusive.slope)}\n" +
-        "leave-one-out residual ${measurement(axis.leaveOneOut.residual)}\n" +
+        "leave-one-out trend residual ${measurement(axis.leaveOneOut.trendResidual)}\n" +
         "inclusive incoming ${measurement(axis.inclusive.incomingSlope)}" +
         " · outgoing ${measurement(axis.inclusive.outgoingSlope)}"
 }

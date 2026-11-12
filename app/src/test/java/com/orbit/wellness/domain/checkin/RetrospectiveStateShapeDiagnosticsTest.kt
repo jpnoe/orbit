@@ -24,7 +24,7 @@ class RetrospectiveStateShapeDiagnosticsTest {
         assertEquals(0.0, checkNotNull(flat.leaveOneOut.stateMad), 0.0)
         assertEquals(0.0, checkNotNull(flat.leaveOneOut.distance), 0.0)
         assertEquals(0.0, checkNotNull(flat.inclusive.slope), 0.0)
-        assertEquals(0.0, checkNotNull(flat.leaveOneOut.residual), 1e-9)
+        assertEquals(0.0, checkNotNull(flat.leaveOneOut.trendResidual), 1e-9)
         assertEquals(0.0, checkNotNull(flat.inclusive.incomingSlope), 0.0)
         assertEquals(0.0, checkNotNull(flat.inclusive.outgoingSlope), 0.0)
         assertTrue(checkNotNull(peak.leaveOneOut.distance) > checkNotNull(flat.leaveOneOut.distance))
@@ -43,7 +43,7 @@ class RetrospectiveStateShapeDiagnosticsTest {
         assertTrue(label.contains("leave-one-out median"))
         assertTrue(label.contains("inclusive segment medians"))
         assertTrue(label.contains("inclusive slope"))
-        assertTrue(label.contains("leave-one-out residual"))
+        assertTrue(label.contains("leave-one-out trend residual"))
         assertTrue(label.contains("inclusive incoming"))
         assertTrue(label.contains("outgoing"))
         assertTrue(label.contains("calm 2"))
@@ -67,8 +67,8 @@ class RetrospectiveStateShapeDiagnosticsTest {
         assertEquals(0.0, checkNotNull(flat.inclusive.slope), 0.0)
         assertTrue(kotlin.math.abs(checkNotNull(flat.inclusive.slope)) < checkNotNull(rising.inclusive.slope))
         assertTrue(checkNotNull(falling.inclusive.slope) < checkNotNull(flat.inclusive.slope))
-        assertEquals(0.0, checkNotNull(rising.leaveOneOut.residual), 1e-9)
-        assertEquals(0.0, checkNotNull(falling.leaveOneOut.residual), 1e-9)
+        assertEquals(0.0, checkNotNull(rising.leaveOneOut.trendResidual), 1e-9)
+        assertEquals(0.0, checkNotNull(falling.leaveOneOut.trendResidual), 1e-9)
     }
 
     @Test
@@ -86,14 +86,14 @@ class RetrospectiveStateShapeDiagnosticsTest {
     fun theFocalResidualUsesTheLineFitWithoutTheFocalPoint() {
         val offLine = mood(ramp(listOf(0, 0, 10, 4)))
         val pair = mood(endingSeries(listOf(1, 5)))
-        assertEquals(22.0 / 3.0, checkNotNull(offLine.leaveOneOut.residual), 1e-9)
+        assertEquals(22.0 / 3.0, checkNotNull(offLine.leaveOneOut.trendResidual), 1e-9)
         assertTrue(checkNotNull(offLine.inclusive.slope) > 0.0)
         assertTrue(checkNotNull(pair.inclusive.slope) > 0.0)
-        assertNull(pair.leaveOneOut.residual)
+        assertNull(pair.leaveOneOut.trendResidual)
         val peak = mood(ramp(listOf(5, 5, 9, 5, 5)))
         assertEquals(
             checkNotNull(peak.focalValue) - checkNotNull(peak.leaveOneOut.stateMedian),
-            checkNotNull(peak.leaveOneOut.residual),
+            checkNotNull(peak.leaveOneOut.trendResidual),
             1e-9,
         )
     }
@@ -240,7 +240,7 @@ class RetrospectiveStateShapeDiagnosticsTest {
         assertNull(mood.leaveOneOut.stateMedian)
         assertNull(mood.leaveOneOut.stateMad)
         assertNull(mood.leaveOneOut.distance)
-        assertNull(mood.leaveOneOut.residual)
+        assertNull(mood.leaveOneOut.trendResidual)
         assertNull(mood.inclusive.slope)
         assertEquals(5.0, checkNotNull(mood.inclusive.balancedMedian), 0.0)
         assertNull(mood.inclusive.medianSpread)
