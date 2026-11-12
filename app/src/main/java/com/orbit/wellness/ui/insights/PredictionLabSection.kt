@@ -32,9 +32,12 @@ import com.orbit.wellness.domain.checkin.ForecastExampleSummary
 import com.orbit.wellness.domain.checkin.BidirectionalEvidenceDataset
 import com.orbit.wellness.domain.checkin.CausalPredecessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDataset
+import com.orbit.wellness.domain.checkin.StateShapeDiagnosticDataset
 import com.orbit.wellness.domain.checkin.bidirectionalAuditDetail
 import com.orbit.wellness.domain.checkin.bidirectionalAuditLabel
 import com.orbit.wellness.domain.checkin.bidirectionalMissingLabel
+import com.orbit.wellness.domain.checkin.stateShapeAuditLabel
+import com.orbit.wellness.domain.checkin.stateShapeMissingLabel
 import com.orbit.wellness.domain.checkin.successorCompactLabel
 import com.orbit.wellness.domain.checkin.successorMissingLabel
 import com.orbit.wellness.domain.checkin.successorTechnicalLabel
@@ -118,6 +121,7 @@ fun PredictionResearchPane(walkForwardViewModel: WalkForwardViewModel) {
             neighborhoods = state.neighborhoods,
             successorNeighborhoods = state.successorNeighborhoods,
             bidirectionalEvidence = state.bidirectionalEvidence,
+            stateShapeDiagnostics = state.stateShapeDiagnostics,
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -129,6 +133,7 @@ private fun PredictionLab(
     neighborhoods: CausalPredecessorNeighborhoodDataset,
     successorNeighborhoods: RetrospectiveSuccessorNeighborhoodDataset,
     bidirectionalEvidence: BidirectionalEvidenceDataset,
+    stateShapeDiagnostics: StateShapeDiagnosticDataset,
     modifier: Modifier = Modifier,
 ) {
     val projection = bundle.walkForward
@@ -155,6 +160,7 @@ private fun PredictionLab(
                 neighborhoods,
                 successorNeighborhoods,
                 bidirectionalEvidence,
+                stateShapeDiagnostics,
             )
             PredictionLabMode.SANDBOX -> PredictionSandboxPane(
                 projection.anchors,
@@ -171,6 +177,7 @@ private fun RecordedReplayPane(
     neighborhoods: CausalPredecessorNeighborhoodDataset,
     successorNeighborhoods: RetrospectiveSuccessorNeighborhoodDataset,
     bidirectionalEvidence: BidirectionalEvidenceDataset,
+    stateShapeDiagnostics: StateShapeDiagnosticDataset,
 ) {
     val projection = bundle.walkForward
     val observationProcess = bundle.observationProcess
@@ -199,6 +206,7 @@ private fun RecordedReplayPane(
             PredecessorContextSection(bundle, neighborhoods, attempt.transitionId)
             RetrospectiveSuccessorSection(successorNeighborhoods, attempt.transitionId)
             BidirectionalEvidenceSection(bidirectionalEvidence, attempt.anchorKey.raw)
+            StateShapeSection(stateShapeDiagnostics, attempt.anchorKey.raw)
             val anchorKey = attempt.anchorKey
             AttemptForecasts(
                 attempt = attempt,
@@ -729,6 +737,20 @@ private fun BidirectionalEvidenceSection(
         Text("Alias index")
     }
     if (detail) Text(bidirectionalAuditDetail(view))
+}
+
+@Composable
+private fun StateShapeSection(
+    diagnostics: StateShapeDiagnosticDataset,
+    focalStateId: String,
+) {
+    var open by remember(focalStateId) { mutableStateOf(false) }
+    TextButton(onClick = { open = !open }) {
+        Text("Retrospective state shape diagnostics")
+    }
+    if (!open) return
+    val view = diagnostics.forFocal(focalStateId)
+    Text(if (view.anchorAt == null) stateShapeMissingLabel() else stateShapeAuditLabel(view))
 }
 
 @Composable

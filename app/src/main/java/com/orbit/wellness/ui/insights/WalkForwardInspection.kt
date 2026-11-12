@@ -8,7 +8,9 @@ import com.orbit.wellness.domain.checkin.ForecastExampleBundle
 import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.projectCausalPredecessorNeighborhood
 import com.orbit.wellness.domain.checkin.projectForecastExamples
+import com.orbit.wellness.domain.checkin.StateShapeDiagnosticDataset
 import com.orbit.wellness.domain.checkin.projectRetrospectiveMultiscaleBidirectionalEvidence
+import com.orbit.wellness.domain.checkin.projectRetrospectiveStateShapeDiagnostics
 import com.orbit.wellness.domain.checkin.projectRetrospectiveSuccessorNeighborhood
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -24,6 +26,7 @@ data class PredictionLabSnapshot(
     val neighborhoods: CausalPredecessorNeighborhoodDataset,
     val successorNeighborhoods: RetrospectiveSuccessorNeighborhoodDataset,
     val bidirectionalEvidence: BidirectionalEvidenceDataset,
+    val stateShapeDiagnostics: StateShapeDiagnosticDataset,
 ) {
     val walkForward get() = examples.walkForward
     val observationProcess get() = examples.observationProcess
@@ -49,11 +52,13 @@ fun observeWalkForward(
     return snapshots
         .distinctUntilChanged()
         .mapLatest { snapshot ->
+            val evidence = projectRetrospectiveMultiscaleBidirectionalEvidence(snapshot.dataset, zone)
             PredictionLabSnapshot(
                 examples = project(snapshot.dataset),
                 neighborhoods = projectCausalPredecessorNeighborhood(snapshot.dataset, zone),
                 successorNeighborhoods = projectRetrospectiveSuccessorNeighborhood(snapshot.dataset),
-                bidirectionalEvidence = projectRetrospectiveMultiscaleBidirectionalEvidence(snapshot.dataset, zone),
+                bidirectionalEvidence = evidence,
+                stateShapeDiagnostics = projectRetrospectiveStateShapeDiagnostics(snapshot.dataset, evidence),
             )
         }
         .flowOn(computation)
