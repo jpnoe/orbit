@@ -12,7 +12,11 @@ import com.orbit.wellness.domain.checkin.PersonalSemanticOccurrenceProjection
 import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.projectCausalPredecessorNeighborhood
 import com.orbit.wellness.domain.checkin.projectForecastExamples
+import com.orbit.wellness.domain.checkin.ReciprocalSignatureDataset
+import com.orbit.wellness.domain.checkin.projectAlternatingTemporalGraph
 import com.orbit.wellness.domain.checkin.projectPersonalSemanticOccurrences
+import com.orbit.wellness.domain.checkin.projectReciprocalSignatures
+import com.orbit.wellness.domain.checkin.retrospectiveVocabulary
 import com.orbit.wellness.domain.checkin.StateShapeDiagnosticDataset
 import com.orbit.wellness.domain.checkin.StateShapeEvidenceDataset
 import com.orbit.wellness.domain.checkin.projectRetrospectiveMultiscaleBidirectionalEvidence
@@ -38,6 +42,7 @@ data class PredictionLabSnapshot(
     val stateShapeDiagnostics: StateShapeDiagnosticDataset,
     val stateShapeEvidence: StateShapeEvidenceDataset,
     val occurrences: PersonalSemanticOccurrenceProjection,
+    val signatures: ReciprocalSignatureDataset,
 ) {
     val walkForward get() = examples.walkForward
     val observationProcess get() = examples.observationProcess
@@ -69,6 +74,12 @@ fun observeWalkForward(
         .distinctUntilChanged()
         .mapLatest { input ->
             val snapshot = input.snapshot
+            val occurrences = projectPersonalSemanticOccurrences(
+                dataset = snapshot.dataset,
+                sleep = input.sleep,
+                substances = input.substances,
+                wearables = input.wearables,
+            )
             val evidence = projectRetrospectiveMultiscaleBidirectionalEvidence(snapshot.dataset, zone)
             val diagnostics = projectRetrospectiveStateShapeDiagnostics(snapshot.dataset, evidence)
             PredictionLabSnapshot(
@@ -78,11 +89,11 @@ fun observeWalkForward(
                 bidirectionalEvidence = evidence,
                 stateShapeDiagnostics = diagnostics,
                 stateShapeEvidence = projectRetrospectiveStateShapeEvidence(diagnostics),
-                occurrences = projectPersonalSemanticOccurrences(
-                    dataset = snapshot.dataset,
-                    sleep = input.sleep,
-                    substances = input.substances,
-                    wearables = input.wearables,
+                occurrences = occurrences,
+                signatures = projectReciprocalSignatures(
+                    projection = occurrences,
+                    graph = projectAlternatingTemporalGraph(snapshot.dataset),
+                    vocabulary = retrospectiveVocabulary(occurrences),
                 ),
             )
         }
