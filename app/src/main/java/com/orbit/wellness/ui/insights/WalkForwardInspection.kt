@@ -15,6 +15,8 @@ import com.orbit.wellness.domain.checkin.projectForecastExamples
 import com.orbit.wellness.domain.checkin.ReciprocalSignatureDataset
 import com.orbit.wellness.domain.checkin.projectAlternatingTemporalGraph
 import com.orbit.wellness.domain.checkin.projectPersonalSemanticOccurrences
+import com.orbit.wellness.domain.checkin.JointEmbeddingDataset
+import com.orbit.wellness.domain.checkin.projectJointSemanticEmbedding
 import com.orbit.wellness.domain.checkin.projectReciprocalSignatures
 import com.orbit.wellness.domain.checkin.retrospectiveVocabulary
 import com.orbit.wellness.domain.checkin.StateShapeDiagnosticDataset
@@ -43,6 +45,7 @@ data class PredictionLabSnapshot(
     val stateShapeEvidence: StateShapeEvidenceDataset,
     val occurrences: PersonalSemanticOccurrenceProjection,
     val signatures: ReciprocalSignatureDataset,
+    val embedding: JointEmbeddingDataset,
 ) {
     val walkForward get() = examples.walkForward
     val observationProcess get() = examples.observationProcess
@@ -80,6 +83,12 @@ fun observeWalkForward(
                 substances = input.substances,
                 wearables = input.wearables,
             )
+            val graph = projectAlternatingTemporalGraph(snapshot.dataset)
+            val signatures = projectReciprocalSignatures(
+                projection = occurrences,
+                graph = graph,
+                vocabulary = retrospectiveVocabulary(occurrences),
+            )
             val evidence = projectRetrospectiveMultiscaleBidirectionalEvidence(snapshot.dataset, zone)
             val diagnostics = projectRetrospectiveStateShapeDiagnostics(snapshot.dataset, evidence)
             PredictionLabSnapshot(
@@ -90,11 +99,8 @@ fun observeWalkForward(
                 stateShapeDiagnostics = diagnostics,
                 stateShapeEvidence = projectRetrospectiveStateShapeEvidence(diagnostics),
                 occurrences = occurrences,
-                signatures = projectReciprocalSignatures(
-                    projection = occurrences,
-                    graph = projectAlternatingTemporalGraph(snapshot.dataset),
-                    vocabulary = retrospectiveVocabulary(occurrences),
-                ),
+                signatures = signatures,
+                embedding = projectJointSemanticEmbedding(signatures, graph),
             )
         }
         .flowOn(computation)

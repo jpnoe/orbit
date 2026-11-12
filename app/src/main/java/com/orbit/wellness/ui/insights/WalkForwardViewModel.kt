@@ -12,6 +12,7 @@ import com.orbit.wellness.domain.checkin.CausalPredecessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.ForecastExampleBundle
 import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.PersonalSemanticOccurrenceProjection
+import com.orbit.wellness.domain.checkin.JointEmbeddingDataset
 import com.orbit.wellness.domain.checkin.ReciprocalSignatureDataset
 import com.orbit.wellness.domain.checkin.StateShapeDiagnosticDataset
 import com.orbit.wellness.domain.checkin.StateShapeEvidenceDataset
@@ -34,6 +35,7 @@ sealed interface WalkForwardUiState {
         val stateShapeEvidence: StateShapeEvidenceDataset,
         val occurrences: PersonalSemanticOccurrenceProjection,
         val signatures: ReciprocalSignatureDataset,
+        val embedding: JointEmbeddingDataset,
     ) : WalkForwardUiState
 }
 
@@ -67,6 +69,7 @@ class WalkForwardViewModel(
                 stateShapeEvidence = snapshot.stateShapeEvidence,
                 occurrences = snapshot.occurrences,
                 signatures = snapshot.signatures,
+                embedding = snapshot.embedding,
             )
         }
         .stateIn(
