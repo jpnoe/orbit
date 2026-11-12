@@ -342,6 +342,16 @@ private fun oppositeSigns(left: ExactSlopeSign, right: ExactSlopeSign): Boolean 
 
 fun stateShapeEvidenceMissingLabel(): String = "This check-in has no retrospective state shape evidence."
 
+internal fun formatShapeEvidenceValue(value: Double?): String {
+    if (value == null || !value.isFinite()) return "—"
+    val scaled = kotlin.math.round(value * 100.0).toLong()
+    val absolute = kotlin.math.abs(scaled)
+    val whole = absolute / 100
+    val fraction = (absolute % 100).toString().padStart(2, '0').trimEnd('0')
+    val digits = if (fraction.isEmpty()) whole.toString() else "$whole.$fraction"
+    return if (scaled < 0) "-$digits" else digits
+}
+
 fun stateShapeEvidenceTable(view: StateShapeEvidenceView): String {
     if (view.anchorAt == null || view.focalAlias == null) return stateShapeEvidenceMissingLabel()
     val header = RETROSPECTIVE_STATE_SHAPE_EVIDENCE_PROTOCOL + "\n" +
@@ -354,7 +364,7 @@ fun stateShapeEvidenceTable(view: StateShapeEvidenceView): String {
 private const val LEGEND =
     "Legend. Local in/out are raw points per hour. Signs are exact. " +
         "Reference, MAD, distance, and trend residual judge the focal reading. " +
-        "The trend residual is not a forecast residual. " +
+        "The trend residual is not the Null/bounded-forecast residual. " +
         "Across-segment rows give each waking segment one vote. " +
         "Slope is raw points per day. Change is the fitted first-to-last movement in raw points. " +
         "Error is the median absolute miss of that line. " +
@@ -430,15 +440,7 @@ private fun radius(millis: Long): String = when {
     else -> "${millis}ms"
 }
 
-private fun show(value: Double?): String {
-    if (value == null || !value.isFinite()) return "—"
-    val scaled = kotlin.math.round(value * 100.0)
-    val sign = if (scaled < 0) "-" else ""
-    val absolute = kotlin.math.abs(scaled)
-    val whole = absolute / 100
-    val fraction = (absolute % 100).toString().padStart(2, '0').trimEnd('0')
-    return sign + if (fraction.isEmpty()) whole.toString() else "$whole.$fraction"
-}
+private fun show(value: Double?): String = formatShapeEvidenceValue(value)
 
 private fun showRelative(millis: Double): String {
     val negative = millis < 0.0

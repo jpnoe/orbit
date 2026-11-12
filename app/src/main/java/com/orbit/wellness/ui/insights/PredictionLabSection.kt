@@ -40,6 +40,7 @@ import com.orbit.wellness.domain.checkin.CausalPredecessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.StateShapeDiagnosticDataset
 import com.orbit.wellness.domain.checkin.StateShapeEvidenceDataset
+import com.orbit.wellness.domain.checkin.formatShapeEvidenceValue
 import com.orbit.wellness.domain.checkin.stateShapeEvidenceMissingLabel
 import com.orbit.wellness.domain.checkin.bidirectionalAuditDetail
 import com.orbit.wellness.domain.checkin.bidirectionalAuditLabel
@@ -782,7 +783,7 @@ private fun StateShapeEvidenceSection(
         return
     }
     Text(
-        "Every scale stays visible. No preferred shape. Local motion is points per hour. Across-segment slope is points per day.",
+        "Every scale stays visible. No preferred shape. Local motion is points per hour. Across-segment slope is points per day. The trend residual in this section is the leave-one-out local trend residual, separate from the Null/bounded-forecast residual.",
         style = MaterialTheme.typography.bodySmall,
     )
     view.axes.forEach { axis ->
@@ -1109,16 +1110,7 @@ private fun turnPhrase(turn: SegmentTurnCandidate): String {
         " · error ${showMeasure(turn.leftFitError)}/${showMeasure(turn.rightFitError)}"
 }
 
-private fun showMeasure(value: Double?): String {
-    if (value == null || !value.isFinite()) return "—"
-    val scaled = kotlin.math.round(value * 100.0)
-    val negative = scaled < 0
-    val absolute = kotlin.math.abs(scaled)
-    val whole = absolute / 100
-    val fraction = (absolute % 100).toString().padStart(2, '0').trimEnd('0')
-    val digits = if (fraction.isEmpty()) whole.toString() else "$whole.$fraction"
-    return if (negative) "-$digits" else digits
-}
+private fun showMeasure(value: Double?): String = formatShapeEvidenceValue(value)
 
 private fun showSigned(value: Double?): String {
     val text = showMeasure(value)

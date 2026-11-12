@@ -112,6 +112,17 @@ class RetrospectiveStateShapeEvidenceTest {
     }
 
     @Test
+    fun displayValuesAreFormattedOnce() {
+        assertEquals("2", formatShapeEvidenceValue(2.0))
+        assertEquals("2.5", formatShapeEvidenceValue(2.5))
+        assertEquals("0.39", formatShapeEvidenceValue(0.39))
+        assertEquals("3.75", formatShapeEvidenceValue(3.75))
+        assertEquals("-3.8", formatShapeEvidenceValue(-3.8))
+        assertEquals("0", formatShapeEvidenceValue(0.0))
+        assertEquals("—", formatShapeEvidenceValue(null))
+    }
+
+    @Test
     fun theAuditTablesKeepScalesAsRowsAndLeaveMissingAxesBlank() {
         val series = wakingDays(listOf(listOf(8, 8, 8), listOf(6, 6, 6), listOf(4, 4, 4), listOf(6, 6, 6), listOf(8, 8, 8)), 2)
         val view = projectRetrospectiveStateShapeEvidence(
