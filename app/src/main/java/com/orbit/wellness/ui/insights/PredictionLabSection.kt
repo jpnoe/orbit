@@ -41,6 +41,7 @@ import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDatas
 import com.orbit.wellness.domain.checkin.DistributionalContextDataset
 import com.orbit.wellness.domain.checkin.JointEmbeddingDataset
 import com.orbit.wellness.domain.checkin.MaskedConceptReconstructionDataset
+import com.orbit.wellness.domain.checkin.SemanticNullComparisonDataset
 import com.orbit.wellness.domain.checkin.PersonalSemanticOccurrenceProjection
 import com.orbit.wellness.domain.checkin.ReciprocalSignatureDataset
 import com.orbit.wellness.domain.checkin.StateShapeDiagnosticDataset
@@ -142,6 +143,7 @@ fun PredictionResearchPane(walkForwardViewModel: WalkForwardViewModel) {
             embedding = state.embedding,
             distributional = state.distributional,
             reconstruction = state.reconstruction,
+            semanticNull = state.semanticNull,
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -160,6 +162,7 @@ private fun PredictionLab(
     embedding: JointEmbeddingDataset,
     distributional: DistributionalContextDataset,
     reconstruction: MaskedConceptReconstructionDataset,
+    semanticNull: SemanticNullComparisonDataset,
     modifier: Modifier = Modifier,
 ) {
     val projection = bundle.walkForward
@@ -193,6 +196,7 @@ private fun PredictionLab(
                 embedding,
                 distributional,
                 reconstruction,
+                semanticNull,
             )
             PredictionLabMode.SANDBOX -> PredictionSandboxPane(
                 projection.anchors,
@@ -216,6 +220,7 @@ private fun RecordedReplayPane(
     embedding: JointEmbeddingDataset,
     distributional: DistributionalContextDataset,
     reconstruction: MaskedConceptReconstructionDataset,
+    semanticNull: SemanticNullComparisonDataset,
 ) {
     val projection = bundle.walkForward
     val observationProcess = bundle.observationProcess
@@ -243,6 +248,7 @@ private fun RecordedReplayPane(
             JointEmbeddingSection(embedding, attempt.anchorKey.raw)
             DistributionalContextSection(distributional, embedding.audit, attempt.anchorKey.raw)
             MaskedConceptReconstructionSection(reconstruction)
+            SemanticNullComparisonSection(semanticNull)
             CausalPreparationSection(bundle, attempt.transitionId)
             NullTrajectorySection(bundle, attempt.transitionId)
             CausalPredecessorSection(neighborhoods, attempt.anchorKey)

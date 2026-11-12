@@ -19,7 +19,10 @@ import com.orbit.wellness.domain.checkin.DistributionalContextDataset
 import com.orbit.wellness.domain.checkin.JointEmbeddingDataset
 import com.orbit.wellness.domain.checkin.conceptNodeId
 import com.orbit.wellness.domain.checkin.MaskedConceptReconstructionDataset
+import com.orbit.wellness.domain.checkin.SemanticNullComparisonDataset
 import com.orbit.wellness.domain.checkin.evaluateMaskedConceptReconstruction
+import com.orbit.wellness.domain.checkin.evaluateWalkForwardSemanticNullComparison
+import com.orbit.wellness.domain.checkin.projectNullTrajectoryLearner
 import com.orbit.wellness.domain.checkin.projectDistributionalContext
 import com.orbit.wellness.domain.checkin.projectJointSemanticEmbedding
 import com.orbit.wellness.domain.checkin.projectReciprocalSignatures
@@ -53,6 +56,7 @@ data class PredictionLabSnapshot(
     val embedding: JointEmbeddingDataset,
     val distributional: DistributionalContextDataset,
     val reconstruction: MaskedConceptReconstructionDataset,
+    val semanticNull: SemanticNullComparisonDataset,
 ) {
     val walkForward get() = examples.walkForward
     val observationProcess get() = examples.observationProcess
@@ -104,10 +108,16 @@ fun observeWalkForward(
                 },
                 projection = occurrences,
             )
+            val examples = project(snapshot.dataset)
+            val nullEvaluation = projectNullTrajectoryLearner(
+                examples.stateForecasts.examples,
+                examples.conditionalTransitions.examples,
+                zone,
+            )
             val evidence = projectRetrospectiveMultiscaleBidirectionalEvidence(snapshot.dataset, zone)
             val diagnostics = projectRetrospectiveStateShapeDiagnostics(snapshot.dataset, evidence)
             PredictionLabSnapshot(
-                examples = project(snapshot.dataset),
+                examples = examples,
                 neighborhoods = projectCausalPredecessorNeighborhood(snapshot.dataset, zone),
                 successorNeighborhoods = projectRetrospectiveSuccessorNeighborhood(snapshot.dataset),
                 bidirectionalEvidence = evidence,
@@ -123,6 +133,12 @@ fun observeWalkForward(
                     signatures = signatures,
                     audit = embedding.audit,
                     reading = distributional.reading,
+                ),
+                semanticNull = evaluateWalkForwardSemanticNullComparison(
+                    evaluation = nullEvaluation,
+                    stateExamples = examples.stateForecasts.examples,
+                    conditionalExamples = examples.conditionalTransitions.examples,
+                    projection = occurrences,
                 ),
             )
         }
