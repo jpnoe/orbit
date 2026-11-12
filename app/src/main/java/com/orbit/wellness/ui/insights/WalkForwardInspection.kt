@@ -100,7 +100,7 @@ fun observeWalkForward(
                 stateShapeEvidence = projectRetrospectiveStateShapeEvidence(diagnostics),
                 occurrences = occurrences,
                 signatures = signatures,
-                embedding = projectJointSemanticEmbedding(signatures, graph),
+                embedding = projectJointSemanticEmbedding(signatures, graph, occurrences),
             )
         }
         .flowOn(computation)

@@ -36,6 +36,7 @@ data class JointEmbeddingDataset(
     val vocabularyScope: String,
     val retrospective: Boolean,
     val method: String,
+    val audit: EmbeddingAuditIndex,
     val layers: List<JointEmbeddingLayer>,
     val judgments: List<String>,
     val predictive: Boolean = false,
@@ -55,9 +56,11 @@ data class JointEmbeddingDataset(
 data class JointEmbeddingLayer(
     val name: String,
     val dimensionality: Int,
+    val occurrenceCount: Int,
     val unreliableBecause: String,
     val omittedConstantPresence: List<String>,
     val quantityHeldBack: List<String>,
+    val columns: List<String>,
     val nodes: List<EmbeddedNode>,
     val edges: List<EmbeddingEdge>,
 ) {
@@ -101,6 +104,113 @@ data class JointEmbeddingLayer(
             .take(limit)
     }
 
+    fun occurrenceLists(anchor: String, audit: EmbeddingAuditIndex): OccurrenceAuditLists {
+        val incident = audit.incidentTransitions[anchor].orEmpty()
+        val focal = audit.focalConcepts[anchor].orEmpty()
+        val carried = listed(anchor, "concept", include = { it in focal }, positiveOnly = false)
+        val omitted = focal.filter { node(it) == null }.map { concept ->
+            val token = concept.removePrefix("concept:")
+            val note = if (token in omittedConstantPresence) "identity presence omitted · no coordinate" else "no coordinate"
+            "${audit.conceptText(concept)} · $note"
+        }
+        val incidentMissing = incident.filter { node(it) == null }.map { transition ->
+            "${audit.recordText(transition)} · no coordinates in this fit"
+        }
+        return OccurrenceAuditLists(
+            states = listed(anchor, "state", include = { true }, positiveOnly = true).take(5),
+            incidentTransitions = listed(anchor, "transition", include = { it in incident }, positiveOnly = false),
+            incidentWithoutCoordinates = incidentMissing,
+            nonincidentTransitions = listed(anchor, "transition", include = { it !in incident }, positiveOnly = true).take(5),
+            carriedConcepts = carried,
+            noncarriedConcepts = listed(anchor, "concept", include = { it !in focal }, positiveOnly = true).take(5),
+            carriedWithoutCoordinates = omitted,
+        )
+    }
+
+    fun conceptLists(conceptId: String): ConceptAuditLists {
+        val states = listed(conceptId, "state", include = { true }, positiveOnly = true)
+        val transitions = listed(conceptId, "transition", include = { true }, positiveOnly = true)
+        return ConceptAuditLists(
+            carryingStates = states,
+            otherStates = emptyList(),
+            carryingTransitions = transitions,
+            otherTransitions = emptyList(),
+            otherConcepts = listed(conceptId, "concept", include = { true }, positiveOnly = true),
+        )
+    }
+
+    fun axisValueContribution(left: String, right: String): Double? {
+        return groupContribution(left, right) { it.startsWith("axis-value|") }
+    }
+
+    fun explanationLines(left: String, right: String): List<String> {
+        val lines = mutableListOf<String>()
+        columns.filter { it.startsWith("axis-value|") }.map { it.removePrefix("axis-value|") }.distinct().forEach { axis ->
+            val contribution = groupContribution(left, right) { it == axisValueColumn(axis) }
+            if (contribution != null) lines += "axis ${axis.substringAfterLast('.')} · value contribution ${formatSigned(contribution)}"
+        }
+        val tokens = columns.mapNotNull { columnToken(it) }.distinct()
+        tokens.forEach { token ->
+            val identity = groupContribution(left, right) { it == identityColumn(token) }?.takeIf { kotlin.math.abs(it) > 1e-8 }
+            val quantity = groupContribution(left, right) { it.startsWith("quantity-") && columnToken(it) == token }
+                ?.takeIf { kotlin.math.abs(it) > 1e-8 }
+            val roleLines = columns.filter { it.startsWith("role|") && columnToken(it) == token }.mapNotNull { column ->
+                val contribution = groupContribution(left, right) { it == column }?.takeIf { kotlin.math.abs(it) > 1e-8 }
+                contribution?.let { "role ${column.removePrefix("role|").substringBefore('|')} · contribution ${formatSigned(it)}" }
+            }
+            if (identity == null && quantity == null && roleLines.isEmpty()) return@forEach
+            if (token in omittedConstantPresence && identity == null) lines += "identity presence omitted · $token"
+            identity?.let { lines += "identity · $token · contribution ${formatSigned(it)}" }
+            lines += roleLines
+            quantity?.let { lines += "quantity · $token · contribution ${formatSigned(it)}" }
+        }
+        return lines.distinct()
+    }
+
+    private fun listed(
+        anchor: String,
+        kind: String,
+        include: (String) -> Boolean,
+        positiveOnly: Boolean,
+    ): List<EmbeddingNeighbor> {
+        if (node(anchor)?.coordinates.isNullOrEmpty()) return emptyList()
+        return nodes
+            .filter { it.kind == kind && it.id != anchor && include(it.id) && it.coordinates.size == columns.size }
+            .map { neighbor ->
+                EmbeddingNeighbor(
+                    id = neighbor.id,
+                    kind = neighbor.kind,
+                    similarity = similarity(anchor, neighbor.id),
+                    contributors = explanationLines(anchor, neighbor.id),
+                )
+            }
+            .filter { !positiveOnly || it.similarity > 1e-8 }
+            .sortedWith(compareByDescending<EmbeddingNeighbor> { it.similarity }.thenBy { it.id })
+    }
+
+    private fun groupContribution(left: String, right: String, include: (String) -> Boolean): Double? {
+        val a = node(left)?.coordinates ?: return null
+        val b = node(right)?.coordinates ?: return null
+        if (a.size != b.size || a.size != columns.size) return null
+        var leftNorm = 0.0
+        var rightNorm = 0.0
+        var groupDot = 0.0
+        var grouped = false
+        for (index in a.indices) {
+            val x = a[index]
+            val y = b[index]
+            if (x.isNaN() || y.isNaN()) continue
+            leftNorm += x * x
+            rightNorm += y * y
+            if (include(columns[index])) {
+                groupDot += x * y
+                grouped = true
+            }
+        }
+        if (!grouped || leftNorm <= 1e-18 || rightNorm <= 1e-18) return null
+        return groupDot / sqrt(leftNorm * rightNorm)
+    }
+
     fun explain(left: String, right: String): List<String> {
         val direct = edges.filter { it.touches(left, right) }
             .sortedWith(compareByDescending<EmbeddingEdge> { it.weight }.thenBy { it.detail })
@@ -137,6 +247,50 @@ data class EmbeddingNeighbor(
     val contributors: List<String>,
 )
 
+data class EmbeddingAuditIndex(
+    val aliasByNode: Map<String, String>,
+    val canonicalByNode: Map<String, String>,
+    val labelByConcept: Map<String, String>,
+    val incidentTransitions: Map<String, Set<String>>,
+    val focalConcepts: Map<String, Set<String>>,
+) {
+    fun recordText(nodeId: String): String {
+        val alias = aliasByNode[nodeId]
+        val canonical = canonicalByNode[nodeId] ?: nodeId.substringAfter(':')
+        return if (alias == null) canonical else "$alias · $canonical"
+    }
+
+    fun conceptText(nodeId: String): String {
+        val token = nodeId.removePrefix("concept:")
+        val label = labelByConcept[nodeId]?.takeIf { it.isNotBlank() } ?: token
+        return "$label · $token"
+    }
+
+    fun conceptAnchorIds(layers: List<JointEmbeddingLayer>): List<String> {
+        return layers.flatMap { layer -> layer.nodes.filter { it.kind == "concept" }.map { it.id } }
+            .distinct()
+            .sortedWith(compareBy({ conceptText(it) }, { it }))
+    }
+}
+
+data class OccurrenceAuditLists(
+    val states: List<EmbeddingNeighbor>,
+    val incidentTransitions: List<EmbeddingNeighbor>,
+    val incidentWithoutCoordinates: List<String>,
+    val nonincidentTransitions: List<EmbeddingNeighbor>,
+    val carriedConcepts: List<EmbeddingNeighbor>,
+    val noncarriedConcepts: List<EmbeddingNeighbor>,
+    val carriedWithoutCoordinates: List<String>,
+)
+
+data class ConceptAuditLists(
+    val carryingStates: List<EmbeddingNeighbor>,
+    val otherStates: List<EmbeddingNeighbor>,
+    val carryingTransitions: List<EmbeddingNeighbor>,
+    val otherTransitions: List<EmbeddingNeighbor>,
+    val otherConcepts: List<EmbeddingNeighbor>,
+)
+
 data class EmbeddingEdge(
     val source: String,
     val target: String,
@@ -164,6 +318,7 @@ fun conceptNodeId(key: ConceptIdentityKey): String = "concept:${conceptToken(key
 fun projectJointSemanticEmbedding(
     signatures: ReciprocalSignatureDataset,
     graph: AlternatingTemporalGraph,
+    projection: PersonalSemanticOccurrenceProjection,
 ): JointEmbeddingDataset {
     val scale = quantityScale(signatures)
     val axes = axisScores(signatures)
@@ -171,6 +326,7 @@ fun projectJointSemanticEmbedding(
         vocabularyScope = signatures.vocabulary.scope,
         retrospective = signatures.vocabulary.retrospective,
         method = METHOD,
+        audit = auditIndex(projection, graph, signatures),
         layers = listOf(
             embedLayer(LAYER_ZERO, signatures, graph, reciprocal = false, scale = scale, axes = axes),
             embedLayer(RECIPROCAL_LAYER, signatures, graph, reciprocal = true, scale = scale, axes = axes),
@@ -181,7 +337,43 @@ fun projectJointSemanticEmbedding(
 
 private const val METHOD =
     "Cosine in one shared column space. Rows are states, transitions, and typed concept identities. " +
-        "The dimension is the number of columns that still vary. It is not truncated."
+        "The dimension is the number of columns that still vary. It is not truncated. " +
+        "Distinct concept rows share no columns, so this baseline does not learn concept-to-concept proximity."
+
+private fun auditIndex(
+    projection: PersonalSemanticOccurrenceProjection,
+    graph: AlternatingTemporalGraph,
+    signatures: ReciprocalSignatureDataset,
+): EmbeddingAuditIndex {
+    val alias = mutableMapOf<String, String>()
+    val canonical = mutableMapOf<String, String>()
+    projection.states.sortedWith(compareBy({ it.recordedAt }, { it.key.raw })).forEachIndexed { index, state ->
+        val node = stateNodeId(state.key.raw)
+        alias[node] = "S" + (index + 1).toString().padStart(2, '0')
+        canonical[node] = state.key.raw
+    }
+    projection.transitions.sortedWith(compareBy({ it.endAt }, { it.key.raw })).forEachIndexed { index, transition ->
+        val node = transitionNodeId(transition.key.raw)
+        alias[node] = "T" + (index + 1).toString().padStart(2, '0')
+        canonical[node] = transition.key.raw
+    }
+    val labels = projection.concepts.associate { support ->
+        conceptNodeId(support.key) to support.displayNames.joinToString(", ")
+    }
+    val incident = graph.states.associate { state ->
+        stateNodeId(state.id) to (state.incomingTransitionIds + state.outgoingTransitionIds).map { transitionNodeId(it) }.toSet()
+    }
+    val focal = attachments(signatures, reciprocal = false)
+        .filter { it.role == "focal" }
+        .groupBy { it.owner }
+        .mapValues { (_, rows) -> rows.map { conceptNodeId(it.concept) }.toSet() }
+    return EmbeddingAuditIndex(alias, canonical, labels, incident, focal)
+}
+
+private fun formatSigned(value: Double): String {
+    val rounded = kotlin.math.round(value * 1000.0) / 1000.0
+    return if (rounded == 0.0) "0.0" else rounded.toString()
+}
 
 private fun judgments(signatures: ReciprocalSignatureDataset): List<String> {
     val scope = if (signatures.vocabulary.retrospective) {
@@ -195,11 +387,12 @@ private fun judgments(signatures: ReciprocalSignatureDataset): List<String> {
         "A carried concept has a shared identity column and a role column. The column records that the role is present. Focal, incoming, outgoing, starting, and ending stay distinct columns. Their audit masses are 4, 2, 1, 3, and 5, and those masses are not coordinates: a larger mass would point away from a unit concept row. Fork order and a repeated role do not increase the column.",
         "A reciprocal copy writes the concept on the context holder as well as the owner. The identity is shared, and a widely copied concept becomes more central. The graph link is shown as an explanation and is not a coordinate.",
         "Vocabulary support is not a column.",
-        "Presence that does not vary within states, and does not vary within transitions, is omitted.",
+        "Presence that does not vary within states, and does not vary within transitions, is omitted. An omitted identity column is not a quantity column and not a role column. Amount or a reciprocal role can remain.",
+        "Distinct concept rows share no columns. Their similarity is zero. This is an unfactorized direct-incidence baseline. Concept-to-concept proximity is not learned.",
         "Amount is per interval, scaled within its typed identity and unit on the focal layer-zero readings in this fit. The concept's quantity pole is that maximum. An observed zero keeps an amount-observed column. A missing amount does not. Several amounts on one occurrence, or mixed units, stay out of the fit. No amount-per-hour rate is built.",
         "Duration, record keys, timestamps, display text, provenance, and Null residuals are not coordinates. An observed axis is a state column. A missing axis is skipped and is not copied onto a transition.",
         "Scales use every occurrence in the supplied signatures. A cutoff vocabulary does not by itself remove a later state's axis reading. A walk-forward caller has to pass only the history that belongs to the fold.",
-        "Fewer than $SMALL_FIT occurrences makes this neighborhood a small-sample measurement.",
+        "A fit with fewer than $SMALL_FIT occurrences is labeled a small sample, and the label states that fit's occurrence count. The label does not remove an occurrence, a concept, a coordinate, or a neighborhood.",
     )
 }
 
@@ -228,16 +421,18 @@ private fun embedLayer(
         placedNodes(rows, columns, occurrences)
     }
     val small = if (occurrences.size < SMALL_FIT) {
-        "Fewer than $SMALL_FIT occurrences. This neighborhood is a small-sample measurement."
+        "Small-sample measurement: ${occurrences.size} occurrences, below $SMALL_FIT. Coordinates and neighborhoods are included."
     } else {
         ""
     }
     return JointEmbeddingLayer(
         name = name,
         dimensionality = if (refused.isNotEmpty()) 0 else columns.size,
+        occurrenceCount = occurrences.size,
         unreliableBecause = refused.ifEmpty { small },
         omittedConstantPresence = omitted.sorted(),
         quantityHeldBack = scale.heldBack.sorted(),
+        columns = if (refused.isNotEmpty()) emptyList() else columns,
         nodes = nodes,
         edges = edges,
     )

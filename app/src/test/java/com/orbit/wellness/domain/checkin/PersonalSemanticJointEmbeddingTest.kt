@@ -34,10 +34,15 @@ class PersonalSemanticJointEmbeddingTest {
     fun roleMassDistinguishesASwappedContext() {
         val reciprocal = embed(swappedHistory()).layer(RECIPROCAL_LAYER)
         val coding = conceptNodeId(ConceptIdentityKey(SemanticConceptType.ACTIVITY, categoricalKey(null, "coding")))
+        val reading = conceptNodeId(ConceptIdentityKey(SemanticConceptType.ACTIVITY, categoricalKey(null, "reading")))
         val up = stateNodeId("up")
         val down = stateNodeId("down")
         assertTrue(reciprocal.edges.any { it.touches(up, coding) && it.detail.contains("incoming") })
         assertTrue(reciprocal.edges.any { it.touches(down, coding) && it.detail.contains("outgoing") })
+        assertTrue(reciprocal.similarity(up, coding) > 0.0)
+        assertTrue(reciprocal.similarity(down, coding) > 0.0)
+        assertTrue(reciprocal.similarity(up, reading) > 0.0)
+        assertTrue(reciprocal.similarity(down, reading) > 0.0)
         assertFalse(sameCoordinates(checkNotNull(reciprocal.node(up)), checkNotNull(reciprocal.node(down))))
         assertTrue(reciprocal.similarity(up, down) < 0.999)
     }
@@ -120,6 +125,52 @@ class PersonalSemanticJointEmbeddingTest {
     }
 
     @Test
+    fun theAuditNamesDirectIncidenceAndDoesNotLearnConceptProximity() {
+        val fitted = embed(runningHistory())
+        val hope = stateNodeId("hope")
+        val after = transitionNodeId("after")
+        val running = conceptNodeId(ConceptIdentityKey(SemanticConceptType.ACTIVITY, categoricalKey(null, "running")))
+        val hopeful = conceptNodeId(ConceptIdentityKey(SemanticConceptType.EMOTION, "hopeful"))
+        assertEquals("S01", fitted.audit.aliasByNode[hope])
+        assertEquals("hope", fitted.audit.canonicalByNode[hope])
+        assertEquals("T01", fitted.audit.aliasByNode[after])
+        assertEquals("running", fitted.audit.labelByConcept[running])
+        assertEquals(setOf(after), fitted.audit.incidentTransitions[hope])
+        val control = fitted.layer(LAYER_ZERO).occurrenceLists(hope, fitted.audit)
+        assertTrue(
+            control.incidentTransitions.any { it.id == after } ||
+                control.incidentWithoutCoordinates.any { it.contains("after") },
+        )
+        assertTrue(control.nonincidentTransitions.isEmpty())
+        assertTrue(control.carriedConcepts.any { it.id == hopeful })
+        assertTrue(control.noncarriedConcepts.none { it.id == running })
+        val reciprocal = fitted.layer(RECIPROCAL_LAYER)
+        assertTrue(reciprocal.occurrenceLists(hope, fitted.audit).noncarriedConcepts.any { it.id == running })
+        assertEquals(0.0, reciprocal.similarity(running, hopeful), 0.0)
+        assertTrue(reciprocal.conceptLists(running).otherConcepts.isEmpty())
+        assertTrue(fitted.judgments.any { it.contains("unfactorized direct-incidence") })
+    }
+
+    @Test
+    fun axisValueContributionKeepsItsSign() {
+        val layer = embed(constantHistory(includeMarker = false)).layer(LAYER_ZERO)
+        val contribution = layer.axisValueContribution(stateNodeId("a"), stateNodeId("b"))
+        assertNotNull(contribution)
+        assertTrue(contribution!! < 0.0)
+        val line = layer.explanationLines(stateNodeId("a"), stateNodeId("b")).single { it.startsWith("axis mood") }
+        assertTrue(line.contains("value contribution -"))
+    }
+
+    @Test
+    fun omittedIdentityStaysDistinctFromQuantity() {
+        val layer = embed(cigaretteHistory(missing = false)).layer(LAYER_ZERO)
+        val lines = layer.explanationLines(transitionNodeId("ten"), cigarettes())
+        assertTrue(lines.any { it.startsWith("identity presence omitted") })
+        assertTrue(lines.any { it.startsWith("quantity") && it.contains("contribution") })
+        assertTrue(lines.none { it.startsWith("identity ·") })
+    }
+
+    @Test
     fun theBaselineStaysOutsideThePredictorAndTheLabCanShowIt() {
         val source = source(
             "src/main/java/com/orbit/wellness/domain/checkin/PersonalSemanticJointEmbedding.kt",
@@ -144,7 +195,11 @@ class PersonalSemanticJointEmbeddingTest {
         assertTrue(section.contains("Joint embedding"))
         val fitted = embed(runningHistory())
         assertFalse(fitted.predictive || fitted.updatesModel || fitted.suitableForRecommendation)
-        assertTrue(fitted.layer(LAYER_ZERO).unreliable)
+        val small = fitted.layer(LAYER_ZERO)
+        assertEquals(3, small.occurrenceCount)
+        assertTrue(small.unreliableBecause.contains("3 occurrences"))
+        assertNotNull(small.node(stateNodeId("hope")))
+        assertTrue(small.nearest(stateNodeId("hope"), "concept").isNotEmpty())
     }
 
     private fun sameCoordinates(left: EmbeddedNode, right: EmbeddedNode): Boolean {
@@ -193,6 +248,7 @@ class PersonalSemanticJointEmbeddingTest {
         return projectJointSemanticEmbedding(
             signatures = projectReciprocalSignatures(projection, graph, vocabulary, mask),
             graph = graph,
+            projection = projection,
         )
     }
 
