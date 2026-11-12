@@ -15,7 +15,10 @@ import com.orbit.wellness.domain.checkin.projectForecastExamples
 import com.orbit.wellness.domain.checkin.ReciprocalSignatureDataset
 import com.orbit.wellness.domain.checkin.projectAlternatingTemporalGraph
 import com.orbit.wellness.domain.checkin.projectPersonalSemanticOccurrences
+import com.orbit.wellness.domain.checkin.DistributionalContextDataset
 import com.orbit.wellness.domain.checkin.JointEmbeddingDataset
+import com.orbit.wellness.domain.checkin.conceptNodeId
+import com.orbit.wellness.domain.checkin.projectDistributionalContext
 import com.orbit.wellness.domain.checkin.projectJointSemanticEmbedding
 import com.orbit.wellness.domain.checkin.projectReciprocalSignatures
 import com.orbit.wellness.domain.checkin.retrospectiveVocabulary
@@ -46,6 +49,7 @@ data class PredictionLabSnapshot(
     val occurrences: PersonalSemanticOccurrenceProjection,
     val signatures: ReciprocalSignatureDataset,
     val embedding: JointEmbeddingDataset,
+    val distributional: DistributionalContextDataset,
 ) {
     val walkForward get() = examples.walkForward
     val observationProcess get() = examples.observationProcess
@@ -89,6 +93,7 @@ fun observeWalkForward(
                 graph = graph,
                 vocabulary = retrospectiveVocabulary(occurrences),
             )
+            val embedding = projectJointSemanticEmbedding(signatures, graph, occurrences)
             val evidence = projectRetrospectiveMultiscaleBidirectionalEvidence(snapshot.dataset, zone)
             val diagnostics = projectRetrospectiveStateShapeDiagnostics(snapshot.dataset, evidence)
             PredictionLabSnapshot(
@@ -100,7 +105,13 @@ fun observeWalkForward(
                 stateShapeEvidence = projectRetrospectiveStateShapeEvidence(diagnostics),
                 occurrences = occurrences,
                 signatures = signatures,
-                embedding = projectJointSemanticEmbedding(signatures, graph, occurrences),
+                embedding = embedding,
+                distributional = projectDistributionalContext(
+                    embedding = embedding,
+                    supportByConcept = signatures.vocabulary.concepts.associate { concept ->
+                        conceptNodeId(concept.key) to concept.backboneSupport
+                    },
+                ),
             )
         }
         .flowOn(computation)

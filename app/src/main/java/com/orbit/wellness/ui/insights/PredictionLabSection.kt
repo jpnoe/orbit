@@ -38,6 +38,7 @@ import com.orbit.wellness.domain.checkin.BidirectionalEvidenceDataset
 import com.orbit.wellness.domain.checkin.BidirectionalSpan
 import com.orbit.wellness.domain.checkin.CausalPredecessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDataset
+import com.orbit.wellness.domain.checkin.DistributionalContextDataset
 import com.orbit.wellness.domain.checkin.JointEmbeddingDataset
 import com.orbit.wellness.domain.checkin.PersonalSemanticOccurrenceProjection
 import com.orbit.wellness.domain.checkin.ReciprocalSignatureDataset
@@ -138,6 +139,7 @@ fun PredictionResearchPane(walkForwardViewModel: WalkForwardViewModel) {
             occurrences = state.occurrences,
             signatures = state.signatures,
             embedding = state.embedding,
+            distributional = state.distributional,
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -154,6 +156,7 @@ private fun PredictionLab(
     occurrences: PersonalSemanticOccurrenceProjection,
     signatures: ReciprocalSignatureDataset,
     embedding: JointEmbeddingDataset,
+    distributional: DistributionalContextDataset,
     modifier: Modifier = Modifier,
 ) {
     val projection = bundle.walkForward
@@ -185,6 +188,7 @@ private fun PredictionLab(
                 occurrences,
                 signatures,
                 embedding,
+                distributional,
             )
             PredictionLabMode.SANDBOX -> PredictionSandboxPane(
                 projection.anchors,
@@ -206,6 +210,7 @@ private fun RecordedReplayPane(
     occurrences: PersonalSemanticOccurrenceProjection,
     signatures: ReciprocalSignatureDataset,
     embedding: JointEmbeddingDataset,
+    distributional: DistributionalContextDataset,
 ) {
     val projection = bundle.walkForward
     val observationProcess = bundle.observationProcess
@@ -231,6 +236,7 @@ private fun RecordedReplayPane(
             Text("Transition ${attempt.transitionId}. Anchor ${attempt.anchorKey.raw}.")
             ReciprocalSignatureSection(signatures, attempt.anchorKey.raw, attempt.transitionId)
             JointEmbeddingSection(embedding, attempt.anchorKey.raw)
+            DistributionalContextSection(distributional, embedding.audit, attempt.anchorKey.raw)
             CausalPreparationSection(bundle, attempt.transitionId)
             NullTrajectorySection(bundle, attempt.transitionId)
             CausalPredecessorSection(neighborhoods, attempt.anchorKey)
