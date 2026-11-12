@@ -52,12 +52,12 @@ fun ReciprocalSignatureSection(
             Text("This attempt has no signature.")
             return
         }
-        FeatureCard("S0", listOf(state.layerZero))
-        FeatureCard("Retrospective S1", state.retrospective)
-        FeatureCard("Causal S1", state.causal)
-        FeatureCard("T0", listOf(transition.layerZero))
-        FeatureCard("Retrospective T1", transition.retrospective)
-        FeatureCard("Causal T1", transition.causal)
+        FeatureCard("S0", listOf(state.layerZero), signatures)
+        FeatureCard("Retrospective S1", state.retrospective, signatures)
+        FeatureCard("Causal S1", state.causal, signatures)
+        FeatureCard("T0", listOf(transition.layerZero), signatures)
+        FeatureCard("Retrospective T1", transition.retrospective, signatures)
+        FeatureCard("Causal T1", transition.causal, signatures)
         CoverageCard("OOV", (state.retrospectiveOov + transition.retrospectiveOov).map { coverage ->
             "${coverage.holderRole} · ${coverage.concept.type.name.lowercase()} · ${coverage.concept.identity}"
         })
@@ -65,7 +65,11 @@ fun ReciprocalSignatureSection(
 }
 
 @Composable
-private fun FeatureCard(title: String, blocks: List<SignatureBlock>) {
+private fun FeatureCard(
+    title: String,
+    blocks: List<SignatureBlock>,
+    signatures: ReciprocalSignatureDataset,
+) {
     var open by remember(title) { mutableStateOf(false) }
     TextButton(onClick = { open = !open }) {
         Text(title)
@@ -81,7 +85,7 @@ private fun FeatureCard(title: String, blocks: List<SignatureBlock>) {
             )
             features.forEach { feature ->
                 Text(
-                    featureLine(feature),
+                    featureLine(feature, signatures),
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -108,7 +112,7 @@ private fun CoverageCard(title: String, lines: List<String>) {
     }
 }
 
-private fun featureLine(feature: SymbolicFeature): String {
-    val support = feature.support?.let { " · support $it" }.orEmpty()
+private fun featureLine(feature: SymbolicFeature, signatures: ReciprocalSignatureDataset): String {
+    val support = signatures.vocabulary.displayedSupport(feature.value)?.let { " · support $it" }.orEmpty()
     return "${feature.name} · ${feature.value}$support"
 }

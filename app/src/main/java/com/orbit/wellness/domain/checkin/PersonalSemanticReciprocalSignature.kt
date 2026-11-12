@@ -39,7 +39,6 @@ data class SymbolicFeature(
     val channel: String,
     val name: String,
     val value: String,
-    val support: Int? = null,
 )
 
 data class SignatureBlock(
@@ -82,6 +81,11 @@ data class ConceptVocabularySnapshot(
     fun contains(key: ConceptIdentityKey): Boolean = concepts.any { it.key == key }
 
     fun supportOf(key: ConceptIdentityKey): Int? = concepts.firstOrNull { it.key == key }?.backboneSupport
+
+    /** Audit display for one concept column. The count is not part of [SymbolicFeature.value]. */
+    fun displayedSupport(featureValue: String): Int? {
+        return concepts.firstOrNull { conceptToken(it.key) == featureValue }?.backboneSupport
+    }
 }
 
 data class SignatureMask(
@@ -406,8 +410,7 @@ private fun admitConcept(
         namespace = FeatureNamespace.CONCEPT,
         channel = channel,
         name = name,
-        value = conceptValue(key),
-        support = vocabulary.supportOf(key),
+        value = conceptToken(key),
     )
 }
 
@@ -438,7 +441,7 @@ private fun categoryToken(kind: CategoryObservationKindV2): String = when (kind)
     CategoryObservationKindV2.CONFLICTING -> "conflicting"
 }
 
-private fun conceptValue(key: ConceptIdentityKey): String {
+private fun conceptToken(key: ConceptIdentityKey): String {
     return "${key.type.name}|${key.identity}|${key.intent.orEmpty()}"
 }
 
@@ -490,7 +493,7 @@ private fun judgments(vocabulary: ConceptVocabularySnapshot, mask: SignatureMask
         "Reviewed-empty, unreviewed, absent, and conflicting stay separate category tokens.",
         "Stored duration is time metadata on layer-zero transitions. The causal transition does not copy it, and no a-priori horizon is stored in its place.",
         "Epoch time stays provenance and is not a semantic coordinate.",
-        "Vocabulary scope is ${vocabulary.scope}. A concept outside that snapshot is OOV coverage, not a new column.",
+        "Vocabulary scope is ${vocabulary.scope}. Support stays on that snapshot. It is not part of a concept column or of signature equality. A cutoff snapshot counts only occurrences before the cutoff. A concept outside the snapshot is OOV coverage, not a new column.",
         "Masking removes a typed identity before assembly. It does not fit an embedding under that mask.",
         "Applied mask excludes ${mask.excludedConcepts.size} identities and ${mask.excludedTypes.size} types.",
         DYNAMICS_ABSENT,

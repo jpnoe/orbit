@@ -122,18 +122,31 @@ class PersonalSemanticReciprocalSignatureTest {
 
     @Test
     fun rareAndRepeatedConceptsKeepSupportAndGainNoImportance() {
-        val signed = sign()
-        val calm = signed.state(StateOccurrenceKey("a")).layerZero.features.single { it.value == "EMOTION|calm|" }
-        val focused = signed.state(StateOccurrenceKey("c")).layerZero.features.single { it.value == "EMOTION|focused|" }
-        assertEquals(2, calm.support)
-        assertEquals(1, focused.support)
+        val projection = projection()
+        val graph = projectAlternatingTemporalGraph(history())
+        val full = retrospectiveVocabulary(projection)
+        val early = vocabularyBeforeCutoff(projection, 25 * HOUR)
+        val calm = ConceptIdentityKey(SemanticConceptType.EMOTION, "calm")
+        val focused = ConceptIdentityKey(SemanticConceptType.EMOTION, "focused")
+        assertEquals(3, full.supportOf(calm))
+        assertEquals(2, early.supportOf(calm))
+        assertEquals(1, full.supportOf(focused))
+        assertEquals(1, early.supportOf(focused))
+        val fullSigned = projectReciprocalSignatures(projection, graph, full)
+        val earlySigned = projectReciprocalSignatures(projection, graph, early)
+        assertEquals(
+            fullSigned.state(StateOccurrenceKey("a")).layerZero.semantic(),
+            earlySigned.state(StateOccurrenceKey("a")).layerZero.semantic(),
+        )
+        val column = fullSigned.state(StateOccurrenceKey("a")).layerZero.features.single { it.value.startsWith("EMOTION|calm|") }
+        assertEquals("EMOTION|calm|", column.value)
         val source = source(
             "src/main/java/com/orbit/wellness/domain/checkin/PersonalSemanticReciprocalSignature.kt",
             "app/src/main/java/com/orbit/wellness/domain/checkin/PersonalSemanticReciprocalSignature.kt",
         ).readText()
         assertFalse(source.contains("weight"))
-        assertFalse(signed.vocabulary.concepts.any { it.key.type == SemanticConceptType.SLEEP_LOG })
-        assertFalse(values(signed.states.flatMap { listOf(it.layerZero) }).any { it.contains("sleep-log") })
+        assertFalse(full.concepts.any { it.key.type == SemanticConceptType.SLEEP_LOG })
+        assertFalse(values(fullSigned.states.flatMap { listOf(it.layerZero) }).any { it.contains("sleep-log") })
     }
 
     @Test
@@ -194,6 +207,7 @@ class PersonalSemanticReciprocalSignatureTest {
                 state("e", 16 * HOUR, mood = 2, emotion = "side"),
                 state("x", 20 * HOUR, mood = 7, emotion = "name:coding"),
                 state("y", 22 * HOUR, mood = 9, emotion = "beta"),
+                state("late", 28 * HOUR, mood = 5, emotion = "calm"),
                 state("n", 30 * HOUR, mood = 5, emotion = "novel"),
             ),
             intervals = listOf(
