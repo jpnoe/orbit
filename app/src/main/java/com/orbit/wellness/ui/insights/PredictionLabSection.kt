@@ -1,11 +1,10 @@
 package com.orbit.wellness.ui.insights
 
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -18,7 +17,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.orbit.wellness.data.local.DefaultCheckInAxes
 import com.orbit.wellness.domain.checkin.AxisPredictionRecord
@@ -32,13 +30,17 @@ import com.orbit.wellness.domain.checkin.FocalAxisStatus
 import com.orbit.wellness.domain.checkin.ForecastEvidence
 import com.orbit.wellness.domain.checkin.ForecastExampleBundle
 import com.orbit.wellness.domain.checkin.ForecastExampleSummary
+import com.orbit.wellness.domain.checkin.ScaleShapeEvidence
+import com.orbit.wellness.domain.checkin.SegmentTurnCandidate
+import com.orbit.wellness.domain.checkin.AdjacentDirectionCount
+import com.orbit.wellness.domain.checkin.AxisShapeEvidence
 import com.orbit.wellness.domain.checkin.BidirectionalEvidenceDataset
+import com.orbit.wellness.domain.checkin.BidirectionalSpan
 import com.orbit.wellness.domain.checkin.CausalPredecessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.StateShapeDiagnosticDataset
 import com.orbit.wellness.domain.checkin.StateShapeEvidenceDataset
 import com.orbit.wellness.domain.checkin.stateShapeEvidenceMissingLabel
-import com.orbit.wellness.domain.checkin.stateShapeEvidenceTable
 import com.orbit.wellness.domain.checkin.bidirectionalAuditDetail
 import com.orbit.wellness.domain.checkin.bidirectionalAuditLabel
 import com.orbit.wellness.domain.checkin.bidirectionalMissingLabel
@@ -779,13 +781,85 @@ private fun StateShapeEvidenceSection(
         Text(stateShapeEvidenceMissingLabel())
         return
     }
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+    Text(
+        "Every scale stays visible. No preferred shape. Local motion is points per hour. Across-segment slope is points per day.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    view.axes.forEach { axis ->
+        AxisEvidenceCards(axis, focalStateId)
+    }
+}
+
+@Composable
+private fun AxisEvidenceCards(
+    axis: AxisShapeEvidence,
+    focalStateId: String,
+) {
+    var open by remember(focalStateId, axis.axisId) {
+        mutableStateOf(axis.axisId == DefaultCheckInAxes.MOOD)
+    }
+    TextButton(onClick = { open = !open }) {
+        Text(axisLabel(axis.axisId))
+    }
+    if (!open) return
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        axis.scales.forEach { scale ->
+            ScaleEvidenceCard(scale)
+        }
+    }
+}
+
+@Composable
+private fun ScaleEvidenceCard(scale: ScaleShapeEvidence) {
+    val local = scale.local
+    val across = scale.across
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
         Text(
-            stateShapeEvidenceTable(view),
-            style = MaterialTheme.typography.bodySmall,
-            fontFamily = FontFamily.Monospace,
-            softWrap = false,
+            "${spanPhrase(scale.span)} · ${countPhrase(local.recordedStateCount, "state", "states")}" +
+                " · ${countPhrase(local.wakingSegmentCount, "segment", "segments")}",
+            style = MaterialTheme.typography.bodyMedium,
         )
+        Text(
+            "- Focal ${showMeasure(local.focalValue)} · reference ${showMeasure(local.leaveOneOutMedian)}" +
+                " · distance ${showMeasure(local.focalDistance)} · MAD ${showMeasure(local.leaveOneOutMad)}",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            "- Local motion ${showSigned(local.incomingSlope)} → ${showSigned(local.outgoingSlope)}" +
+                " · trend residual ${showSigned(local.trendResidual)}",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            "- Segment center ${showMeasure(across.balancedCenter)} · spread ${showMeasure(across.balancedSpread)}",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            "- Across segments: slope ${showSigned(across.betweenSegmentSlope)}" +
+                " · change ${showSigned(across.fittedFirstToLastChange)}" +
+                " · error ${showMeasure(across.fitError)}" +
+                " · agreement ${agreementPhrase(across.adjacentDirection)}",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (!across.turnsInspected) {
+            Text("- Turns: —", style = MaterialTheme.typography.bodySmall)
+        } else if (across.turns.isEmpty()) {
+            Text("- Turns: none", style = MaterialTheme.typography.bodySmall)
+        } else {
+            Text("- Turns:", style = MaterialTheme.typography.bodySmall)
+            across.turns.forEach { turn ->
+                Text(
+                    turnPhrase(turn),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.fillMaxWidth().padding(start = 12.dp),
+                )
+            }
+        }
     }
 }
 
@@ -1003,4 +1077,69 @@ private fun axisLabel(axisId: String): String = when (axisId) {
     DefaultCheckInAxes.CONFIDENCE -> "Confidence"
     DefaultCheckInAxes.ANXIETY -> "Anxiety"
     else -> axisId
+}
+
+private fun spanPhrase(span: BidirectionalSpan): String {
+    return "${evidenceRadius(span.backwardMillis)} back / ${evidenceRadius(span.forwardMillis)} forward"
+}
+
+private fun evidenceRadius(millis: Long): String {
+    val hour = 3_600_000L
+    val day = 24L * hour
+    return when {
+        millis % day == 0L -> "${millis / day}d"
+        millis % hour == 0L -> "${millis / hour}h"
+        else -> "${millis}ms"
+    }
+}
+
+private fun countPhrase(count: Int, singular: String, plural: String): String {
+    return "$count ${if (count == 1) singular else plural}"
+}
+
+private fun agreementPhrase(agreement: AdjacentDirectionCount?): String {
+    if (agreement == null) return "—"
+    return "${agreement.agreeingSteps}/${agreement.comparableSteps}"
+}
+
+private fun turnPhrase(turn: SegmentTurnCandidate): String {
+    return "${showRelative(turn.anchorRelativeMillis)}" +
+        " · left ${showSigned(turn.leftSlope)} · right ${showSigned(turn.rightSlope)}" +
+        " · arms ${turn.leftArmCount}/${turn.rightArmCount}" +
+        " · error ${showMeasure(turn.leftFitError)}/${showMeasure(turn.rightFitError)}"
+}
+
+private fun showMeasure(value: Double?): String {
+    if (value == null || !value.isFinite()) return "—"
+    val scaled = kotlin.math.round(value * 100.0)
+    val negative = scaled < 0
+    val absolute = kotlin.math.abs(scaled)
+    val whole = absolute / 100
+    val fraction = (absolute % 100).toString().padStart(2, '0').trimEnd('0')
+    val digits = if (fraction.isEmpty()) whole.toString() else "$whole.$fraction"
+    return if (negative) "-$digits" else digits
+}
+
+private fun showSigned(value: Double?): String {
+    val text = showMeasure(value)
+    if (text == "—" || text == "0" || text.startsWith("-")) return text
+    return "+$text"
+}
+
+private fun showRelative(millis: Double): String {
+    val negative = millis < 0.0
+    val hours = kotlin.math.round(kotlin.math.abs(millis) / 3_600_000.0).toLong()
+    val days = hours / 24
+    val rest = hours % 24
+    val body = when {
+        hours == 0L -> "0h"
+        rest == 0L -> "${days}d"
+        days == 0L -> "${rest}h"
+        else -> "${days}d${rest}h"
+    }
+    return when {
+        hours == 0L -> body
+        negative -> "-$body"
+        else -> "+$body"
+    }
 }
