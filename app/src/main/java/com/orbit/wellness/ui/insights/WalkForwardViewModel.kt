@@ -9,6 +9,7 @@ import com.orbit.wellness.domain.checkin.CausalPredecessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.ForecastExampleBundle
 import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.StateShapeDiagnosticDataset
+import com.orbit.wellness.domain.checkin.StateShapeEvidenceDataset
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -25,6 +26,7 @@ sealed interface WalkForwardUiState {
         val successorNeighborhoods: RetrospectiveSuccessorNeighborhoodDataset,
         val bidirectionalEvidence: BidirectionalEvidenceDataset,
         val stateShapeDiagnostics: StateShapeDiagnosticDataset,
+        val stateShapeEvidence: StateShapeEvidenceDataset,
     ) : WalkForwardUiState
 }
 
@@ -47,6 +49,7 @@ class WalkForwardViewModel(
                 successorNeighborhoods = snapshot.successorNeighborhoods,
                 bidirectionalEvidence = snapshot.bidirectionalEvidence,
                 stateShapeDiagnostics = snapshot.stateShapeDiagnostics,
+                stateShapeEvidence = snapshot.stateShapeEvidence,
             )
         }
         .stateIn(

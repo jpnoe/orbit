@@ -9,8 +9,10 @@ import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDatas
 import com.orbit.wellness.domain.checkin.projectCausalPredecessorNeighborhood
 import com.orbit.wellness.domain.checkin.projectForecastExamples
 import com.orbit.wellness.domain.checkin.StateShapeDiagnosticDataset
+import com.orbit.wellness.domain.checkin.StateShapeEvidenceDataset
 import com.orbit.wellness.domain.checkin.projectRetrospectiveMultiscaleBidirectionalEvidence
 import com.orbit.wellness.domain.checkin.projectRetrospectiveStateShapeDiagnostics
+import com.orbit.wellness.domain.checkin.projectRetrospectiveStateShapeEvidence
 import com.orbit.wellness.domain.checkin.projectRetrospectiveSuccessorNeighborhood
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -27,6 +29,7 @@ data class PredictionLabSnapshot(
     val successorNeighborhoods: RetrospectiveSuccessorNeighborhoodDataset,
     val bidirectionalEvidence: BidirectionalEvidenceDataset,
     val stateShapeDiagnostics: StateShapeDiagnosticDataset,
+    val stateShapeEvidence: StateShapeEvidenceDataset,
 ) {
     val walkForward get() = examples.walkForward
     val observationProcess get() = examples.observationProcess
@@ -53,12 +56,14 @@ fun observeWalkForward(
         .distinctUntilChanged()
         .mapLatest { snapshot ->
             val evidence = projectRetrospectiveMultiscaleBidirectionalEvidence(snapshot.dataset, zone)
+            val diagnostics = projectRetrospectiveStateShapeDiagnostics(snapshot.dataset, evidence)
             PredictionLabSnapshot(
                 examples = project(snapshot.dataset),
                 neighborhoods = projectCausalPredecessorNeighborhood(snapshot.dataset, zone),
                 successorNeighborhoods = projectRetrospectiveSuccessorNeighborhood(snapshot.dataset),
                 bidirectionalEvidence = evidence,
-                stateShapeDiagnostics = projectRetrospectiveStateShapeDiagnostics(snapshot.dataset, evidence),
+                stateShapeDiagnostics = diagnostics,
+                stateShapeEvidence = projectRetrospectiveStateShapeEvidence(diagnostics),
             )
         }
         .flowOn(computation)

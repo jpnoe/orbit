@@ -21,6 +21,8 @@ import kotlin.math.abs
  * The leave-one-out trend residual refits that line without the focal reading,
  * evaluates it at the focal timestamp, and subtracts the prediction from the
  * observed value. It is separate from a Null or bounded-forecast residual.
+ * Each segment level also carries the median recorded time of the residents
+ * that formed its axis median.
  *
  * This pass does not score a shape, pick a scale, or feed a forecast.
  */
@@ -39,6 +41,7 @@ const val RETROSPECTIVE_STATE_SHAPE_DIAGNOSTICS_ASSUMPTIONS =
         "The leave-one-out trend residual refits the median pairwise line without the focal reading and subtracts its value at the focal timestamp. " +
         "That trend residual is separate from a Null or bounded-forecast residual. " +
         "Incoming and outgoing slopes include the focal reading only as an endpoint. " +
+        "A segment level carries the median recorded time of the residents that formed its axis median. " +
         "A slope or trend residual is unavailable when fewer than two distinct timestamps remain. " +
         "A deviation is unavailable when fewer than two values remain. " +
         "An admitted state is a resident of one segment, predecessor context, or ambiguous. " +
@@ -162,10 +165,13 @@ data class SegmentLevel(
     val kind: SegmentKind,
     val recordedStateCount: Int,
     val median: Double?,
+    val medianRecordedAtMillis: Double?,
 ) {
     init {
         require(recordedStateCount >= 0)
         require(median == null || median.isFinite())
+        require(medianRecordedAtMillis == null || medianRecordedAtMillis.isFinite())
+        require((median == null) == (medianRecordedAtMillis == null))
         require(recordedStateCount > 0 || median == null)
     }
 }
@@ -362,11 +368,14 @@ private fun diagnoseAxis(
         diagnosticMedian(surrounding.map { abs(it - stateMedian) })
     }
     val levels = candidate.segments.mapIndexed { index, segment ->
-        val values = recorded.filter { it.first.segmentIndex == index }.map { it.second }
+        val readings = recorded.filter { it.first.segmentIndex == index }
+        val values = readings.map { it.second }
+        val median = diagnosticMedian(values)
         SegmentLevel(
             kind = segment.kind,
             recordedStateCount = values.size,
-            median = diagnosticMedian(values),
+            median = median,
+            medianRecordedAtMillis = if (median == null) null else diagnosticMedian(readings.map { it.first.at.toDouble() }),
         )
     }
     val segmentMedians = levels.mapNotNull { it.median }

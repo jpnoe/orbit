@@ -1,5 +1,7 @@
 package com.orbit.wellness.ui.insights
 
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,6 +18,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.orbit.wellness.data.local.DefaultCheckInAxes
 import com.orbit.wellness.domain.checkin.AxisPredictionRecord
@@ -33,6 +36,9 @@ import com.orbit.wellness.domain.checkin.BidirectionalEvidenceDataset
 import com.orbit.wellness.domain.checkin.CausalPredecessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.StateShapeDiagnosticDataset
+import com.orbit.wellness.domain.checkin.StateShapeEvidenceDataset
+import com.orbit.wellness.domain.checkin.stateShapeEvidenceMissingLabel
+import com.orbit.wellness.domain.checkin.stateShapeEvidenceTable
 import com.orbit.wellness.domain.checkin.bidirectionalAuditDetail
 import com.orbit.wellness.domain.checkin.bidirectionalAuditLabel
 import com.orbit.wellness.domain.checkin.bidirectionalMissingLabel
@@ -122,6 +128,7 @@ fun PredictionResearchPane(walkForwardViewModel: WalkForwardViewModel) {
             successorNeighborhoods = state.successorNeighborhoods,
             bidirectionalEvidence = state.bidirectionalEvidence,
             stateShapeDiagnostics = state.stateShapeDiagnostics,
+            stateShapeEvidence = state.stateShapeEvidence,
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -134,6 +141,7 @@ private fun PredictionLab(
     successorNeighborhoods: RetrospectiveSuccessorNeighborhoodDataset,
     bidirectionalEvidence: BidirectionalEvidenceDataset,
     stateShapeDiagnostics: StateShapeDiagnosticDataset,
+    stateShapeEvidence: StateShapeEvidenceDataset,
     modifier: Modifier = Modifier,
 ) {
     val projection = bundle.walkForward
@@ -161,6 +169,7 @@ private fun PredictionLab(
                 successorNeighborhoods,
                 bidirectionalEvidence,
                 stateShapeDiagnostics,
+                stateShapeEvidence,
             )
             PredictionLabMode.SANDBOX -> PredictionSandboxPane(
                 projection.anchors,
@@ -178,6 +187,7 @@ private fun RecordedReplayPane(
     successorNeighborhoods: RetrospectiveSuccessorNeighborhoodDataset,
     bidirectionalEvidence: BidirectionalEvidenceDataset,
     stateShapeDiagnostics: StateShapeDiagnosticDataset,
+    stateShapeEvidence: StateShapeEvidenceDataset,
 ) {
     val projection = bundle.walkForward
     val observationProcess = bundle.observationProcess
@@ -207,6 +217,7 @@ private fun RecordedReplayPane(
             RetrospectiveSuccessorSection(successorNeighborhoods, attempt.transitionId)
             BidirectionalEvidenceSection(bidirectionalEvidence, attempt.anchorKey.raw)
             StateShapeSection(stateShapeDiagnostics, attempt.anchorKey.raw)
+            StateShapeEvidenceSection(stateShapeEvidence, attempt.anchorKey.raw)
             val anchorKey = attempt.anchorKey
             AttemptForecasts(
                 attempt = attempt,
@@ -751,6 +762,31 @@ private fun StateShapeSection(
     if (!open) return
     val view = diagnostics.forFocal(focalStateId)
     Text(if (view.anchorAt == null) stateShapeMissingLabel() else stateShapeAuditLabel(view))
+}
+
+@Composable
+private fun StateShapeEvidenceSection(
+    evidence: StateShapeEvidenceDataset,
+    focalStateId: String,
+) {
+    var open by remember(focalStateId) { mutableStateOf(false) }
+    TextButton(onClick = { open = !open }) {
+        Text("Retrospective state shape evidence")
+    }
+    if (!open) return
+    val view = evidence.forFocal(focalStateId)
+    if (view.anchorAt == null) {
+        Text(stateShapeEvidenceMissingLabel())
+        return
+    }
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+        Text(
+            stateShapeEvidenceTable(view),
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+            softWrap = false,
+        )
+    }
 }
 
 @Composable
