@@ -34,6 +34,13 @@ data class MaskedConceptReconstructionDataset(
     val reciprocal: ReconstructionMetrics,
     val byType: List<ReconstructionSlice>,
     val bySupportBand: List<ReconstructionSlice>,
+    val macro: ReconstructionMacroSlice,
+    val macroByType: List<ReconstructionMacroSlice>,
+    val macroBySupportBand: List<ReconstructionMacroSlice>,
+    val paired: ReconstructionPairSlice,
+    val pairedByType: List<ReconstructionPairSlice>,
+    val pairedBySupportBand: List<ReconstructionPairSlice>,
+    val identities: List<ReconstructionIdentitySummary>,
     val folds: List<ReconstructionFold>,
     val judgments: List<String>,
     val predictive: Boolean = false,
@@ -65,6 +72,61 @@ data class ReconstructionSlice(
     val frequency: ReconstructionMetrics,
     val layerZero: ReconstructionMetrics,
     val reciprocal: ReconstructionMetrics,
+)
+
+data class ReconstructionMacroSlice(
+    val label: String,
+    val scoredIdentities: Int,
+    val coldStartIdentities: Int,
+    val frequency: ReconstructionMacroRates,
+    val layerZero: ReconstructionMacroRates,
+    val reciprocal: ReconstructionMacroRates,
+)
+
+data class ReconstructionMacroRates(
+    val label: String,
+    val top1Rate: Double?,
+    val top3Rate: Double?,
+    val meanReciprocalRank: Double?,
+)
+
+data class ReconstructionPairSlice(
+    val label: String,
+    val versusLayerZero: ReconstructionPairing,
+    val versusFrequency: ReconstructionPairing,
+)
+
+data class ReconstructionPairing(
+    val baseline: String,
+    val scoredFolds: Int,
+    val better: Int,
+    val tied: Int,
+    val worse: Int,
+    val meanReciprocalRankDelta: Double?,
+    val top1Gained: Int,
+    val top1Lost: Int,
+) {
+    init {
+        require(better + tied + worse == scoredFolds)
+    }
+}
+
+data class ReconstructionIdentitySummary(
+    val label: String,
+    val type: SemanticConceptType,
+    val scoredFolds: Int,
+    val coldStartFolds: Int,
+    val untrustedFolds: Int,
+    val supportRemaining: Int,
+    val frequency: ReconstructionIdentityRates,
+    val layerZero: ReconstructionIdentityRates,
+    val reciprocal: ReconstructionIdentityRates,
+)
+
+data class ReconstructionIdentityRates(
+    val top1Hits: Int,
+    val top3Hits: Int,
+    val meanReciprocalRank: Double?,
 )
 
 data class ReconstructionApproach(
@@ -118,6 +180,7 @@ fun evaluateMaskedConceptReconstruction(
     val folds = holdouts(projection).map { holdout ->
         evaluateFold(holdout, baseCounts, projection, graph, signatures, audit, reading)
     }
+    val identities = identitySummaries(folds)
     return MaskedConceptReconstructionDataset(
         eligible = folds.size,
         scored = folds.count { it.scored },
@@ -134,6 +197,25 @@ fun evaluateMaskedConceptReconstruction(
             val matching = folds.filter { it.scored && supportBand(it.supportRemaining) == band }
             if (matching.isEmpty()) null else slice("remaining $band", matching)
         },
+        macro = macroSlice("overall", identities),
+        macroByType = SemanticConceptType.entries.filter { isEligibleConceptType(it) }.mapNotNull { type ->
+            val matching = identities.filter { it.type == type }
+            if (matching.isEmpty()) null else macroSlice(type.auditLabel(), matching)
+        },
+        macroBySupportBand = listOf("1", "2-4", "5+").mapNotNull { band ->
+            val matching = identities.filter { supportBand(it.supportRemaining) == band }
+            if (matching.isEmpty()) null else macroSlice("remaining $band", matching)
+        },
+        paired = pairSlice("overall", folds),
+        pairedByType = SemanticConceptType.entries.filter { isEligibleConceptType(it) }.mapNotNull { type ->
+            val matching = folds.filter { it.type == type }
+            if (matching.none { it.scored }) null else pairSlice(type.auditLabel(), matching)
+        },
+        pairedBySupportBand = listOf("1", "2-4", "5+").mapNotNull { band ->
+            val matching = folds.filter { it.scored && supportBand(it.supportRemaining) == band }
+            if (matching.isEmpty()) null else pairSlice("remaining $band", matching)
+        },
+        identities = identities,
         folds = folds,
         judgments = judgments(),
     )
@@ -278,9 +360,122 @@ private fun metrics(
 private fun slice(label: String, folds: List<ReconstructionFold>): ReconstructionSlice {
     return ReconstructionSlice(
         label = label,
-        frequency = metrics(label, folds) { it.frequency },
-        layerZero = metrics(label, folds) { it.layerZero },
-        reciprocal = metrics(label, folds) { it.reciprocal },
+        frequency = metrics("Frequency", folds) { it.frequency },
+        layerZero = metrics("Layer zero", folds) { it.layerZero },
+        reciprocal = metrics("Reciprocal", folds) { it.reciprocal },
+    )
+}
+
+private fun identitySummaries(folds: List<ReconstructionFold>): List<ReconstructionIdentitySummary> {
+    return folds.groupBy { it.target }.map { (_, group) ->
+        val sample = group.first()
+        val remaining = group.map { it.supportRemaining }.distinct().single()
+        ReconstructionIdentitySummary(
+            label = identityLabel(sample),
+            type = sample.type,
+            scoredFolds = group.count { it.scored },
+            coldStartFolds = group.count { it.coldStart },
+            untrustedFolds = group.count { !it.heldOutAbsent },
+            supportRemaining = remaining,
+            frequency = identityRates(group) { it.frequency },
+            layerZero = identityRates(group) { it.layerZero },
+            reciprocal = identityRates(group) { it.reciprocal },
+        )
+    }.sortedWith(compareByDescending<ReconstructionIdentitySummary> { it.scoredFolds }.thenBy { it.label })
+}
+
+private fun identityLabel(fold: ReconstructionFold): String {
+    val intent = fold.target.intent?.takeIf { it.isNotBlank() }
+    return if (intent == null) fold.hiddenText else "${fold.hiddenText} · $intent"
+}
+
+private fun identityRates(
+    folds: List<ReconstructionFold>,
+    approach: (ReconstructionFold) -> ReconstructionApproach,
+): ReconstructionIdentityRates {
+    val scored = folds.filter { it.scored }
+    if (scored.isEmpty()) return ReconstructionIdentityRates(0, 0, null)
+    return ReconstructionIdentityRates(
+        top1Hits = scored.count { checkNotNull(approach(it).rank) == 1 },
+        top3Hits = scored.count { checkNotNull(approach(it).rank) <= 3 },
+        meanReciprocalRank = scored.sumOf { 1.0 / checkNotNull(approach(it).rank) } / scored.size,
+    )
+}
+
+private fun macroSlice(
+    label: String,
+    identities: List<ReconstructionIdentitySummary>,
+): ReconstructionMacroSlice {
+    val scored = identities.filter { it.scoredFolds > 0 }
+    val coldStart = identities.filter { it.scoredFolds == 0 && it.coldStartFolds > 0 }
+    return ReconstructionMacroSlice(
+        label = label,
+        scoredIdentities = scored.size,
+        coldStartIdentities = coldStart.size,
+        frequency = macroRates("Frequency", scored) { it.frequency },
+        layerZero = macroRates("Layer zero", scored) { it.layerZero },
+        reciprocal = macroRates("Reciprocal", scored) { it.reciprocal },
+    )
+}
+
+private fun macroRates(
+    label: String,
+    identities: List<ReconstructionIdentitySummary>,
+    rates: (ReconstructionIdentitySummary) -> ReconstructionIdentityRates,
+): ReconstructionMacroRates {
+    if (identities.isEmpty()) return ReconstructionMacroRates(label, null, null, null)
+    return ReconstructionMacroRates(
+        label = label,
+        top1Rate = identities.map { rates(it).top1Hits.toDouble() / it.scoredFolds }.average(),
+        top3Rate = identities.map { rates(it).top3Hits.toDouble() / it.scoredFolds }.average(),
+        meanReciprocalRank = identities.map { checkNotNull(rates(it).meanReciprocalRank) }.average(),
+    )
+}
+
+private fun pairSlice(label: String, folds: List<ReconstructionFold>): ReconstructionPairSlice {
+    return ReconstructionPairSlice(
+        label = label,
+        versusLayerZero = pairing("Layer zero", folds) { it.layerZero },
+        versusFrequency = pairing("Frequency", folds) { it.frequency },
+    )
+}
+
+private fun pairing(
+    baseline: String,
+    folds: List<ReconstructionFold>,
+    other: (ReconstructionFold) -> ReconstructionApproach,
+): ReconstructionPairing {
+    val scored = folds.filter { it.scored }
+    if (scored.isEmpty()) {
+        return ReconstructionPairing(baseline, 0, 0, 0, 0, null, 0, 0)
+    }
+    var better = 0
+    var tied = 0
+    var worse = 0
+    var gained = 0
+    var lost = 0
+    var delta = 0.0
+    scored.forEach { fold ->
+        val reciprocal = checkNotNull(fold.reciprocal.rank)
+        val baselineRank = checkNotNull(other(fold).rank)
+        when {
+            reciprocal < baselineRank -> better += 1
+            reciprocal == baselineRank -> tied += 1
+            else -> worse += 1
+        }
+        if (reciprocal == 1 && baselineRank != 1) gained += 1
+        if (baselineRank == 1 && reciprocal != 1) lost += 1
+        delta += 1.0 / reciprocal - 1.0 / baselineRank
+    }
+    return ReconstructionPairing(
+        baseline = baseline,
+        scoredFolds = scored.size,
+        better = better,
+        tied = tied,
+        worse = worse,
+        meanReciprocalRankDelta = delta / scored.size,
+        top1Gained = gained,
+        top1Lost = lost,
     )
 }
 
@@ -505,6 +700,9 @@ private fun judgments(): List<String> {
         "Candidates are identities of the same concept type. Reviewed-empty, unreviewed, absent, and conflicting categories are not targets. Quantity is not predicted.",
         "A higher score ranks first. Ties break by identity, then intent, in ascending order.",
         "A target with no remaining occurrence is cold-start and is not an incorrect prediction.",
+        "Each scored identity has equal weight in the macro averages. A cold-start identity is counted apart from that average.",
+        "Paired counts compare reciprocal rank with layer zero and with frequency on the same scored folds. Better means a smaller rank. The reciprocal-rank delta is the mean of one over the reciprocal rank minus one over the other rank.",
+        "The occurrence-weighted metrics stay beside those summaries. The summaries do not select a winner, fit a mixture, or change a rank.",
         "This evaluation does not cluster, name a region, recommend, or read a Null residual.",
     )
 }

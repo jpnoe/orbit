@@ -30,7 +30,53 @@ class PersonalSemanticMaskedConceptReconstructionTest {
         assertEquals(0, result.coldStart)
         assertTrue(result.folds.all { it.line().isNotBlank() })
         assertTrue(result.byType.any { it.label == "emotion" })
+        val emotion = result.byType.single { it.label == "emotion" }
+        assertEquals("Frequency", emotion.frequency.label)
+        assertEquals("Layer zero", emotion.layerZero.label)
+        assertEquals("Reciprocal", emotion.reciprocal.label)
         assertTrue(result.bySupportBand.any { it.label == "remaining 1" })
+        val band = result.bySupportBand.single { it.label == "remaining 1" }
+        assertEquals("Frequency", band.frequency.label)
+        assertEquals("Layer zero", band.layerZero.label)
+        assertEquals("Reciprocal", band.reciprocal.label)
+    }
+
+    @Test
+    fun eachScoredIdentityHasEqualWeight() {
+        val result = evaluate(prevalenceHistory())
+        assertEquals(8, result.eligible)
+        assertEquals(7, result.scored)
+        assertEquals(1, result.coldStart)
+        assertEquals(5, result.frequency.top1Hits)
+        assertEquals(7, result.frequency.scored)
+        assertEquals(2, result.macro.scoredIdentities)
+        assertEquals(1, result.macro.coldStartIdentities)
+        assertEquals(0.5, checkNotNull(result.macro.frequency.top1Rate), 1e-9)
+        assertEquals(0.75, checkNotNull(result.macro.frequency.meanReciprocalRank), 1e-9)
+        assertEquals("Frequency", result.macro.frequency.label)
+        assertEquals("Layer zero", result.macro.layerZero.label)
+        assertEquals("Reciprocal", result.macro.reciprocal.label)
+        val emotion = result.macroByType.single { it.label == "emotion" }
+        assertEquals(2, emotion.scoredIdentities)
+        assertEquals(1, emotion.coldStartIdentities)
+        assertEquals(0.5, checkNotNull(emotion.frequency.top1Rate), 1e-9)
+        val rare = result.macroBySupportBand.single { it.label == "remaining 1" }
+        assertEquals(1, rare.scoredIdentities)
+        assertEquals(1, rare.coldStartIdentities)
+        assertEquals(0.0, checkNotNull(rare.frequency.top1Rate), 1e-9)
+        val common = result.macroBySupportBand.single { it.label == "remaining 2-4" }
+        assertEquals(1, common.scoredIdentities)
+        assertEquals(0, common.coldStartIdentities)
+        assertEquals(1.0, checkNotNull(common.frequency.top1Rate), 1e-9)
+        assertEquals("moth · emotion", result.identities.first().label)
+        assertEquals(5, result.identities.first().scoredFolds)
+        assertTrue(result.identities.any { it.label == "solo · emotion" && it.coldStartFolds == 1 && it.scoredFolds == 0 })
+        assertPairing("Layer zero", result.folds, result.paired.versusLayerZero) { it.layerZero.rank }
+        assertPairing("Frequency", result.folds, result.paired.versusFrequency) { it.frequency.rank }
+        val emotionPairs = result.pairedByType.single { it.label == "emotion" }
+        assertEquals(result.paired.versusFrequency.better, emotionPairs.versusFrequency.better)
+        assertTrue(result.judgments.any { it.contains("equal weight") })
+        assertTrue(result.judgments.any { it.contains("do not select a winner") })
     }
 
     @Test
@@ -127,6 +173,10 @@ class PersonalSemanticMaskedConceptReconstructionTest {
         ).readText()
         assertTrue(section.contains("Concept reconstruction"))
         assertTrue(section.contains("cold-start"))
+        assertTrue(section.contains("Macro by identity"))
+        assertTrue(section.contains("Paired folds"))
+        assertTrue(section.contains("Identities"))
+        assertTrue(architecture.contains("equal weight"))
         val result = evaluate(moodHistory())
         assertFalse(result.predictive || result.updatesModel || result.suitableForRecommendation)
         assertFalse(result.walkForward || result.causal)
@@ -164,6 +214,45 @@ class PersonalSemanticMaskedConceptReconstructionTest {
             projection,
         )
         return Fitted(projection, graph, signatures, embedding, distributional)
+    }
+
+    private fun assertPairing(
+        baseline: String,
+        folds: List<ReconstructionFold>,
+        pairing: ReconstructionPairing,
+        otherRank: (ReconstructionFold) -> Int?,
+    ) {
+        val scored = folds.filter { it.scored }
+        val better = scored.count { checkNotNull(it.reciprocal.rank) < checkNotNull(otherRank(it)) }
+        val tied = scored.count { checkNotNull(it.reciprocal.rank) == checkNotNull(otherRank(it)) }
+        val worse = scored.count { checkNotNull(it.reciprocal.rank) > checkNotNull(otherRank(it)) }
+        val gained = scored.count { it.reciprocal.rank == 1 && otherRank(it) != 1 }
+        val lost = scored.count { otherRank(it) == 1 && it.reciprocal.rank != 1 }
+        val delta = scored.map { 1.0 / checkNotNull(it.reciprocal.rank) - 1.0 / checkNotNull(otherRank(it)) }.average()
+        assertEquals(baseline, pairing.baseline)
+        assertEquals(scored.size, pairing.scoredFolds)
+        assertEquals(better, pairing.better)
+        assertEquals(tied, pairing.tied)
+        assertEquals(worse, pairing.worse)
+        assertEquals(gained, pairing.top1Gained)
+        assertEquals(lost, pairing.top1Lost)
+        assertEquals(delta, checkNotNull(pairing.meanReciprocalRankDelta), 1e-9)
+    }
+
+    private fun prevalenceHistory(): CheckInAnalysisDatasetV2 {
+        return history(
+            states = listOf(
+                state("bee-a", 0L, mood = 5, emotion = "bee"),
+                state("bee-b", 2 * HOUR, mood = 5, emotion = "bee"),
+                state("moth-a", 4 * HOUR, mood = 5, emotion = "moth"),
+                state("moth-b", 6 * HOUR, mood = 5, emotion = "moth"),
+                state("moth-c", 8 * HOUR, mood = 5, emotion = "moth"),
+                state("moth-d", 10 * HOUR, mood = 5, emotion = "moth"),
+                state("moth-e", 12 * HOUR, mood = 5, emotion = "moth"),
+                state("solo", 14 * HOUR, mood = 5, emotion = "solo"),
+            ),
+            intervals = emptyList(),
+        )
     }
 
     private fun moodHistory(): CheckInAnalysisDatasetV2 {
