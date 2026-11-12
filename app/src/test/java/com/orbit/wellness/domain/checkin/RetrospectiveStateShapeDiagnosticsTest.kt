@@ -20,29 +20,31 @@ class RetrospectiveStateShapeDiagnosticsTest {
         val flat = mood(plateau)
         val peak = mood(shock)
         assertEquals(5.0, checkNotNull(flat.focalValue), 0.0)
-        assertEquals(5.0, checkNotNull(flat.stateWeightedMedian), 0.0)
-        assertEquals(0.0, checkNotNull(flat.stateWeightedMad), 0.0)
-        assertEquals(0.0, checkNotNull(flat.focalDistance), 0.0)
-        assertEquals(0.0, checkNotNull(flat.segmentSlope), 0.0)
-        assertEquals(0.0, checkNotNull(flat.segmentResidual), 1e-9)
-        assertEquals(0.0, checkNotNull(flat.incomingSlope), 0.0)
-        assertEquals(0.0, checkNotNull(flat.outgoingSlope), 0.0)
-        assertTrue(checkNotNull(peak.focalDistance) > checkNotNull(flat.focalDistance))
-        assertTrue(checkNotNull(peak.incomingSlope) > 0.0)
-        assertTrue(checkNotNull(peak.outgoingSlope) < 0.0)
+        assertEquals(5.0, checkNotNull(flat.leaveOneOut.stateMedian), 0.0)
+        assertEquals(0.0, checkNotNull(flat.leaveOneOut.stateMad), 0.0)
+        assertEquals(0.0, checkNotNull(flat.leaveOneOut.distance), 0.0)
+        assertEquals(0.0, checkNotNull(flat.inclusive.slope), 0.0)
+        assertEquals(0.0, checkNotNull(flat.leaveOneOut.residual), 1e-9)
+        assertEquals(0.0, checkNotNull(flat.inclusive.incomingSlope), 0.0)
+        assertEquals(0.0, checkNotNull(flat.inclusive.outgoingSlope), 0.0)
+        assertTrue(checkNotNull(peak.leaveOneOut.distance) > checkNotNull(flat.leaveOneOut.distance))
+        assertTrue(checkNotNull(peak.inclusive.incomingSlope) > 0.0)
+        assertTrue(checkNotNull(peak.inclusive.outgoingSlope) < 0.0)
         val energy = axis(plateau.first, plateau.second, DefaultCheckInAxes.ENERGY)
         assertNull(energy.focalValue)
-        assertNull(energy.stateWeightedMedian)
-        assertNull(energy.segmentSlope)
+        assertNull(energy.leaveOneOut.stateMedian)
+        assertNull(energy.inclusive.slope)
         assertEquals(0, energy.recordedStateCount)
         val view = project(plateau.first, plateau.second)
         assertEquals(2, view.candidates.single().emotions.single { it.emotion == "calm" }.count)
         assertEquals(1, view.candidates.single().emotions.single { it.emotion == "glad" }.count)
         assertEquals(2, view.candidates.single().emotionAbsentCount)
         val label = stateShapeAuditLabel(view)
-        assertTrue(label.contains("state median"))
-        assertTrue(label.contains("balanced"))
-        assertTrue(label.contains("incoming"))
+        assertTrue(label.contains("leave-one-out median"))
+        assertTrue(label.contains("inclusive segment medians"))
+        assertTrue(label.contains("inclusive slope"))
+        assertTrue(label.contains("leave-one-out residual"))
+        assertTrue(label.contains("inclusive incoming"))
         assertTrue(label.contains("outgoing"))
         assertTrue(label.contains("calm 2"))
         assertTrue(label.contains("No preferred scale."))
@@ -56,17 +58,17 @@ class RetrospectiveStateShapeDiagnosticsTest {
         val rising = mood(ramp(listOf(1, 3, 5, 7, 9)))
         val falling = mood(ramp(listOf(9, 7, 5, 3, 1)))
         val flat = mood(ramp(listOf(5, 5, 5, 5, 5)))
-        assertTrue(checkNotNull(rising.segmentSlope) > 0.0)
-        assertTrue(checkNotNull(rising.incomingSlope) > 0.0)
-        assertTrue(checkNotNull(rising.outgoingSlope) > 0.0)
-        assertTrue(checkNotNull(falling.segmentSlope) < 0.0)
-        assertTrue(checkNotNull(falling.incomingSlope) < 0.0)
-        assertTrue(checkNotNull(falling.outgoingSlope) < 0.0)
-        assertEquals(0.0, checkNotNull(flat.segmentSlope), 0.0)
-        assertTrue(kotlin.math.abs(checkNotNull(flat.segmentSlope)) < checkNotNull(rising.segmentSlope))
-        assertTrue(checkNotNull(falling.segmentSlope) < checkNotNull(flat.segmentSlope))
-        assertEquals(0.0, checkNotNull(rising.segmentResidual), 1e-9)
-        assertEquals(0.0, checkNotNull(falling.segmentResidual), 1e-9)
+        assertTrue(checkNotNull(rising.inclusive.slope) > 0.0)
+        assertTrue(checkNotNull(rising.inclusive.incomingSlope) > 0.0)
+        assertTrue(checkNotNull(rising.inclusive.outgoingSlope) > 0.0)
+        assertTrue(checkNotNull(falling.inclusive.slope) < 0.0)
+        assertTrue(checkNotNull(falling.inclusive.incomingSlope) < 0.0)
+        assertTrue(checkNotNull(falling.inclusive.outgoingSlope) < 0.0)
+        assertEquals(0.0, checkNotNull(flat.inclusive.slope), 0.0)
+        assertTrue(kotlin.math.abs(checkNotNull(flat.inclusive.slope)) < checkNotNull(rising.inclusive.slope))
+        assertTrue(checkNotNull(falling.inclusive.slope) < checkNotNull(flat.inclusive.slope))
+        assertEquals(0.0, checkNotNull(rising.leaveOneOut.residual), 1e-9)
+        assertEquals(0.0, checkNotNull(falling.leaveOneOut.residual), 1e-9)
     }
 
     @Test
@@ -74,18 +76,34 @@ class RetrospectiveStateShapeDiagnosticsTest {
         val rising = mood(endingSeries(listOf(1, 3, 5)))
         val falling = mood(endingSeries(listOf(9, 7, 5)))
         assertEquals(checkNotNull(rising.focalValue), checkNotNull(falling.focalValue), 0.0)
-        assertTrue(checkNotNull(rising.incomingSlope) > 0.0)
-        assertTrue(checkNotNull(falling.incomingSlope) < 0.0)
-        assertNull(rising.outgoingSlope)
-        assertNull(falling.outgoingSlope)
+        assertTrue(checkNotNull(rising.inclusive.incomingSlope) > 0.0)
+        assertTrue(checkNotNull(falling.inclusive.incomingSlope) < 0.0)
+        assertNull(rising.inclusive.outgoingSlope)
+        assertNull(falling.inclusive.outgoingSlope)
+    }
+
+    @Test
+    fun theFocalResidualUsesTheLineFitWithoutTheFocalPoint() {
+        val offLine = mood(ramp(listOf(0, 0, 10, 4)))
+        val pair = mood(endingSeries(listOf(1, 5)))
+        assertEquals(22.0 / 3.0, checkNotNull(offLine.leaveOneOut.residual), 1e-9)
+        assertTrue(checkNotNull(offLine.inclusive.slope) > 0.0)
+        assertTrue(checkNotNull(pair.inclusive.slope) > 0.0)
+        assertNull(pair.leaveOneOut.residual)
+        val peak = mood(ramp(listOf(5, 5, 9, 5, 5)))
+        assertEquals(
+            checkNotNull(peak.focalValue) - checkNotNull(peak.leaveOneOut.stateMedian),
+            checkNotNull(peak.leaveOneOut.residual),
+            1e-9,
+        )
     }
 
     @Test
     fun aValleyFallsIntoTheFocalStateAndRisesAfterIt() {
         val valley = mood(ramp(listOf(8, 6, 4, 6, 8)))
-        assertTrue(checkNotNull(valley.incomingSlope) < 0.0)
-        assertTrue(checkNotNull(valley.outgoingSlope) > 0.0)
-        assertTrue(checkNotNull(valley.incomingSlope) < checkNotNull(valley.outgoingSlope))
+        assertTrue(checkNotNull(valley.inclusive.incomingSlope) < 0.0)
+        assertTrue(checkNotNull(valley.inclusive.outgoingSlope) > 0.0)
+        assertTrue(checkNotNull(valley.inclusive.incomingSlope) < checkNotNull(valley.inclusive.outgoingSlope))
     }
 
     @Test
@@ -94,17 +112,17 @@ class RetrospectiveStateShapeDiagnosticsTest {
         val uneven = mood(days(listOf(1, 1, 1, 9, 9, 9)), BidirectionalSpan(7L * DAY, 3L * DAY))
         assertEquals(3, even.wakingSegmentCount)
         assertEquals(3, uneven.wakingSegmentCount)
-        assertEquals(2, even.segmentLevels[0].recordedStateCount)
-        assertEquals(2, even.segmentLevels[1].recordedStateCount)
-        assertEquals(2, even.segmentLevels[2].recordedStateCount)
-        assertEquals(2, uneven.segmentLevels[1].recordedStateCount)
-        assertEquals(6, uneven.segmentLevels[2].recordedStateCount)
-        assertEquals(SegmentKind.FOCAL_ORDERED, uneven.segmentLevels[1].kind)
-        assertEquals(0.0, checkNotNull(uneven.segmentSlope), 0.0)
-        assertEquals(checkNotNull(even.segmentBalancedMedian), checkNotNull(uneven.segmentBalancedMedian), 0.0)
-        assertEquals(checkNotNull(even.segmentMedianSpread), checkNotNull(uneven.segmentMedianSpread), 0.0)
-        assertEquals(0.0, checkNotNull(uneven.segmentMedianSpread), 0.0)
-        assertTrue(checkNotNull(uneven.stateWeightedMad) > checkNotNull(even.stateWeightedMad))
+        assertEquals(2, even.inclusive.levels[0].recordedStateCount)
+        assertEquals(2, even.inclusive.levels[1].recordedStateCount)
+        assertEquals(2, even.inclusive.levels[2].recordedStateCount)
+        assertEquals(2, uneven.inclusive.levels[1].recordedStateCount)
+        assertEquals(6, uneven.inclusive.levels[2].recordedStateCount)
+        assertEquals(SegmentKind.FOCAL_ORDERED, uneven.inclusive.levels[1].kind)
+        assertEquals(0.0, checkNotNull(uneven.inclusive.slope), 0.0)
+        assertEquals(checkNotNull(even.inclusive.balancedMedian), checkNotNull(uneven.inclusive.balancedMedian), 0.0)
+        assertEquals(checkNotNull(even.inclusive.medianSpread), checkNotNull(uneven.inclusive.medianSpread), 0.0)
+        assertEquals(0.0, checkNotNull(uneven.inclusive.medianSpread), 0.0)
+        assertTrue(checkNotNull(uneven.leaveOneOut.stateMad) > checkNotNull(even.leaveOneOut.stateMad))
     }
 
     @Test
@@ -124,11 +142,14 @@ class RetrospectiveStateShapeDiagnosticsTest {
         val wide = view.candidates.single { it.span == wideSpan }.axes.single { it.axisId == DefaultCheckInAxes.MOOD }
         assertEquals(2, narrow.recordedStateCount)
         assertEquals(3, wide.recordedStateCount)
-        assertEquals(5.0, checkNotNull(narrow.stateWeightedMedian), 0.0)
-        assertEquals(7.5, checkNotNull(wide.stateWeightedMedian), 0.0)
-        assertEquals(0.0, checkNotNull(narrow.segmentSlope), 0.0)
-        assertTrue(checkNotNull(wide.segmentSlope) > 0.0)
-        assertTrue(view.candidates.all { it.repeatedMembershipCount == 0 })
+        assertEquals(5.0, checkNotNull(narrow.leaveOneOut.stateMedian), 0.0)
+        assertEquals(7.5, checkNotNull(wide.leaveOneOut.stateMedian), 0.0)
+        assertEquals(0.0, checkNotNull(narrow.inclusive.slope), 0.0)
+        assertTrue(checkNotNull(wide.inclusive.slope) > 0.0)
+        assertTrue(view.candidates.all { candidate ->
+            candidate.residences.none { it.kind == StateResidenceKind.AMBIGUOUS }
+        })
+        assertFalse(view.candidates.single { it.span == narrowSpan }.residences.any { it.stateId == "late" })
     }
 
     @Test
@@ -147,18 +168,62 @@ class RetrospectiveStateShapeDiagnosticsTest {
                 boundary("wake", "a", start + HOUR, start + 2 * HOUR, CheckInContextStartBasis.WAKE_TIME),
             ),
         )
-        val axis = mood(data to "a")
-        assertEquals(0, project(data, "a").candidates.single().repeatedMembershipCount)
+        val shape = project(data, "a")
+        val axis = shape.candidates.single().axes.single { it.axisId == DefaultCheckInAxes.MOOD }
+        assertTrue(shape.candidates.single().residences.none { it.kind == StateResidenceKind.AMBIGUOUS })
         assertEquals(4, axis.recordedStateCount)
-        val focal = axis.segmentLevels.single { it.kind == SegmentKind.FOCAL_ORDERED }
-        val branches = axis.segmentLevels.filter { it.kind == SegmentKind.BRANCH_LOCAL_PREDECESSOR }
+        val focal = axis.inclusive.levels.single { it.kind == SegmentKind.FOCAL_ORDERED }
+        val branches = axis.inclusive.levels.filter { it.kind == SegmentKind.BRANCH_LOCAL_PREDECESSOR }
         assertEquals(2, focal.recordedStateCount)
         assertEquals(1.5, checkNotNull(focal.median), 0.0)
         assertEquals(2, branches.size)
         assertTrue(branches.all { it.recordedStateCount == 1 })
         assertEquals(setOf(3.0, 4.0), branches.map { checkNotNull(it.median) }.toSet())
-        assertTrue(checkNotNull(axis.incomingSlope) > 0.0)
-        assertNull(axis.outgoingSlope)
+        assertTrue(checkNotNull(axis.inclusive.incomingSlope) > 0.0)
+        assertNull(axis.inclusive.outgoingSlope)
+    }
+
+    @Test
+    fun residentMembershipAssignsEveryAdmittedStateOnce() {
+        val start = 70L * DAY
+        val data = dataset(
+            states = listOf(
+                state("origin", start, 1),
+                state("a", start + HOUR, 2),
+                state("next", start + 5 * HOUR, 4),
+                state("wake", start + 2 * HOUR, 3),
+            ),
+            intervals = listOf(
+                linked("a", "origin", start, start + HOUR),
+                linked("next", "a", start + HOUR, start + 5 * HOUR),
+                boundary("wake", "a", start + HOUR, start + 2 * HOUR, CheckInContextStartBasis.WAKE_TIME),
+            ),
+        )
+        val spans = listOf(BidirectionalSpan(DAY, DAY))
+        val span = projectRetrospectiveMultiscaleBidirectionalEvidence(data, "a", zone, spans).candidates.single()
+        val shape = project(data, "a", spans).candidates.single()
+        reconcile(span, shape)
+        val branch = span.segments.indexOfFirst { it.rootStateId == "next" }
+        val focal = span.segments.indexOfFirst { it.kind == SegmentKind.FOCAL_ORDERED }
+        assertTrue(branch >= 0 && focal >= 0)
+        assertTrue("a" in span.segments[branch].statesInSpan)
+        assertTrue(shape.residences.none { it.stateId == "a" && it.segmentIndex == branch })
+        assertEquals(focal, shape.residences.single { it.stateId == "origin" }.segmentIndex)
+        assertEquals(focal, shape.residences.single { it.stateId == "a" }.segmentIndex)
+        assertEquals(StateResidenceKind.RESIDENT, shape.residences.single { it.stateId == "origin" }.kind)
+        val mood = shape.axes.single { it.axisId == DefaultCheckInAxes.MOOD }
+        assertTrue(checkNotNull(mood.inclusive.incomingSlope) > 0.0)
+        assertEquals(shape.residences.count { it.kind == StateResidenceKind.RESIDENT }, mood.recordedStateCount)
+        assertEquals(mood.recordedStateCount, mood.inclusive.levels.sumOf { it.recordedStateCount })
+        val chain = chain(
+            listOf(
+                Sample("back", start - 2 * HOUR, 5),
+                Sample("focal", start, 5),
+                Sample("late", start + 2 * HOUR, 8),
+            ),
+        )
+        val ordered = projectRetrospectiveMultiscaleBidirectionalEvidence(chain, "focal", zone, spans).candidates.single()
+        reconcile(ordered, project(chain, "focal", spans).candidates.single())
     }
 
     @Test
@@ -172,12 +237,13 @@ class RetrospectiveStateShapeDiagnosticsTest {
         assertEquals(DEFAULT_BIDIRECTIONAL_AUDIT_SPANS, view.candidates.map { it.span })
         val mood = view.candidates.first().axes.single { it.axisId == DefaultCheckInAxes.MOOD }
         assertEquals(5.0, checkNotNull(mood.focalValue), 0.0)
-        assertNull(mood.stateWeightedMedian)
-        assertNull(mood.stateWeightedMad)
-        assertNull(mood.focalDistance)
-        assertNull(mood.segmentSlope)
-        assertEquals(5.0, checkNotNull(mood.segmentBalancedMedian), 0.0)
-        assertNull(mood.segmentMedianSpread)
+        assertNull(mood.leaveOneOut.stateMedian)
+        assertNull(mood.leaveOneOut.stateMad)
+        assertNull(mood.leaveOneOut.distance)
+        assertNull(mood.leaveOneOut.residual)
+        assertNull(mood.inclusive.slope)
+        assertEquals(5.0, checkNotNull(mood.inclusive.balancedMedian), 0.0)
+        assertNull(mood.inclusive.medianSpread)
         val label = stateShapeAuditLabel(view)
         assertEquals(6, label.lines().count { it.startsWith("left ") })
         assertTrue(label.contains("focal $FOCAL_STATE_ALIAS"))
@@ -229,6 +295,41 @@ class RetrospectiveStateShapeDiagnosticsTest {
         val architecture = source("docs/architecture.md", "../docs/architecture.md").readText()
         assertTrue(architecture.contains("retrospective-state-shape-diagnostics-v1"))
         assertTrue(architecture.contains("bidirectional-smoothed-state"))
+    }
+
+    private fun reconcile(span: BidirectionalCandidate, shape: StateShapeCandidate) {
+        val claims = span.segments.map { segment ->
+            val forward = segment.futureEvidence.flatMap { it.inSpanStateIds }.toSet()
+            segment.statesInSpan.mapNotNull { id ->
+                if (id != segment.rootStateId && id !in forward) return@mapNotNull null
+                span.comparableState(id)
+            }.toSet()
+        }
+        val admitted = span.segments.flatMap { it.statesInSpan }
+            .mapNotNull { span.comparableState(it) }
+            .distinct()
+        assertEquals(admitted.toSet(), shape.residences.map { it.stateId }.toSet())
+        admitted.forEach { id ->
+            val owners = claims.mapIndexedNotNull { index, ids -> index.takeIf { id in ids } }
+            val record = shape.residences.single { it.stateId == id }
+            when (owners.size) {
+                0 -> {
+                    assertEquals(StateResidenceKind.PREDECESSOR_CONTEXT, record.kind)
+                    assertNull(record.segmentIndex)
+                }
+                1 -> {
+                    assertEquals(StateResidenceKind.RESIDENT, record.kind)
+                    assertEquals(owners.single(), record.segmentIndex)
+                }
+                else -> {
+                    assertEquals(StateResidenceKind.AMBIGUOUS, record.kind)
+                    assertNull(record.segmentIndex)
+                }
+            }
+        }
+        val residents = shape.residences.filter { it.kind == StateResidenceKind.RESIDENT }
+        assertEquals(residents.size, residents.map { it.stateId }.distinct().size)
+        assertTrue(shape.residences.filter { it.kind != StateResidenceKind.RESIDENT }.all { it.segmentIndex == null })
     }
 
     private fun mood(series: Pair<CheckInAnalysisDatasetV2, String>, span: BidirectionalSpan = BidirectionalSpan(DAY, DAY)) =

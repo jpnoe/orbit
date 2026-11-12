@@ -12,10 +12,14 @@ import kotlin.math.abs
  *
  * A segment's own median and slope use its root and the states named by its future
  * evidence. Predecessor ids on a branch stay path context, so the fork is not copied
- * into that branch. State-weighted summaries use each admitted check-in once.
- * The leave-one-out reference drops the focal check-in. The focal segment median
- * keeps it. Slopes stay inside the focal waking segment, in raw points per hour,
- * and use the median of pairwise slopes across distinct timestamps.
+ * into that branch. A state claimed by two segments is ambiguous and stays out of
+ * every segment summary. State-weighted summaries use each admitted check-in once.
+ *
+ * [InclusiveWakingSegmentSummary] describes the segments and may include the focal
+ * reading. [LeaveOneOutFocalReference] judges the focal reading and excludes it.
+ * The inclusive slope stays the median pairwise slope of the whole focal segment.
+ * The focal residual refits that line without the focal reading, evaluates it at
+ * the focal timestamp, and subtracts the prediction from the observed value.
  *
  * This pass does not score a shape, pick a scale, or feed a forecast.
  */
@@ -28,12 +32,14 @@ const val RETROSPECTIVE_STATE_SHAPE_DIAGNOSTICS_ASSUMPTIONS =
         "It is not a forecast input, does not update a model, and is not for recommendation. " +
         "Membership is comparableState. Transition keys and canonical ids are not rejoined to recover values. " +
         "Readings are raw core-axis points. Missing and conflicting axes stay missing. " +
-        "The leave-one-out median and deviation exclude the focal check-in. " +
-        "A segment median includes the check-ins that reside in that waking segment. " +
-        "State-weighted and segment-balanced summaries are both kept. " +
-        "Slopes are the median pairwise slope in raw points per hour inside the focal waking segment. " +
-        "A slope is unavailable when fewer than two distinct timestamps remain. " +
+        "Leave-one-out references exclude the focal check-in. " +
+        "The inclusive segment median, segment-balanced median, and segment slope include the residents of each waking segment. " +
+        "Those inclusive summaries are descriptions. They are not evidence about the focal point. " +
+        "The focal residual refits the median pairwise line without the focal reading and subtracts its value at the focal timestamp. " +
+        "Incoming and outgoing slopes include the focal reading only as an endpoint. " +
+        "A slope or residual is unavailable when fewer than two distinct timestamps remain. " +
         "A deviation is unavailable when fewer than two values remain. " +
+        "An admitted state is a resident of one segment, predecessor context, or ambiguous. " +
         "Emotion labels are counted and are not placed on a number line. " +
         "No shape score, preferred scale, cluster, or learner update is computed."
 
@@ -113,17 +119,36 @@ data class EmotionCount(
     }
 }
 
+enum class StateResidenceKind {
+    RESIDENT,
+    PREDECESSOR_CONTEXT,
+    AMBIGUOUS,
+}
+
+data class StateResidence(
+    val stateId: String,
+    val kind: StateResidenceKind,
+    val segmentIndex: Int?,
+) {
+    init {
+        require(stateId.isNotEmpty())
+        require(segmentIndex == null || segmentIndex >= 0)
+        require((kind == StateResidenceKind.RESIDENT) == (segmentIndex != null))
+    }
+}
+
 data class StateShapeCandidate(
     val span: BidirectionalSpan,
     val wakingSegmentCount: Int,
-    val repeatedMembershipCount: Int,
+    val residences: List<StateResidence>,
     val emotions: List<EmotionCount>,
     val emotionAbsentCount: Int,
     val axes: List<AxisShapeDiagnostic>,
 ) {
     init {
         require(wakingSegmentCount >= 0)
-        require(repeatedMembershipCount >= 0)
+        require(residences.map { it.stateId } == residences.map { it.stateId }.distinct())
+        require(residences.filter { it.kind == StateResidenceKind.RESIDENT }.all { checkNotNull(it.segmentIndex) < wakingSegmentCount })
         require(emotionAbsentCount >= 0)
         require(emotions == emotions.sortedBy { it.emotion })
         require(axes.map { it.axisId } == CheckInAnalysisDatasetV2.CORE_AXIS_IDS)
@@ -143,40 +168,66 @@ data class SegmentLevel(
     }
 }
 
+/**
+ * Descriptions of the waking segments. Medians and the full-segment slope include
+ * every resident, including the focal check-in when it resides there. Incoming and
+ * outgoing slopes include the focal reading only because it is an endpoint.
+ * These fields do not judge the focal point.
+ */
+data class InclusiveWakingSegmentSummary(
+    val levels: List<SegmentLevel>,
+    val balancedMedian: Double?,
+    val medianSpread: Double?,
+    val slope: Double?,
+    val incomingSlope: Double?,
+    val outgoingSlope: Double?,
+) {
+    init {
+        require(balancedMedian == null || balancedMedian.isFinite())
+        require(medianSpread == null || medianSpread >= 0.0)
+        require(slope == null || slope.isFinite())
+        require(incomingSlope == null || incomingSlope.isFinite())
+        require(outgoingSlope == null || outgoingSlope.isFinite())
+    }
+}
+
+/**
+ * References that judge the focal reading. Every value is computed without that reading.
+ * [residual] is the focal observation minus the robust line fit to the other residents
+ * of the focal waking segment, evaluated at the focal timestamp.
+ */
+data class LeaveOneOutFocalReference(
+    val stateMedian: Double?,
+    val stateMad: Double?,
+    val distance: Double?,
+    val residual: Double?,
+) {
+    init {
+        require(stateMedian == null || stateMedian.isFinite())
+        require(stateMad == null || stateMad >= 0.0)
+        require(distance == null || distance >= 0.0)
+        require(residual == null || residual.isFinite())
+    }
+}
+
 data class AxisShapeDiagnostic(
     val axisId: String,
     val recordedStateCount: Int,
     val wakingSegmentCount: Int,
     val focalValue: Double?,
-    val stateWeightedMedian: Double?,
-    val stateWeightedMad: Double?,
-    val focalDistance: Double?,
-    val segmentLevels: List<SegmentLevel>,
-    val segmentBalancedMedian: Double?,
-    val segmentMedianSpread: Double?,
-    val segmentSlope: Double?,
-    val segmentResidual: Double?,
-    val incomingSlope: Double?,
-    val outgoingSlope: Double?,
+    val leaveOneOut: LeaveOneOutFocalReference,
+    val inclusive: InclusiveWakingSegmentSummary,
 ) {
     init {
         require(axisId in CheckInAnalysisDatasetV2.CORE_AXIS_IDS)
         require(recordedStateCount >= 0)
-        require(wakingSegmentCount == segmentLevels.size)
+        require(wakingSegmentCount == inclusive.levels.size)
         require(focalValue == null || focalValue.isFinite())
-        require(stateWeightedMedian == null || stateWeightedMedian.isFinite())
-        require(stateWeightedMad == null || stateWeightedMad >= 0.0)
-        require(segmentBalancedMedian == null || segmentBalancedMedian.isFinite())
-        require(segmentMedianSpread == null || segmentMedianSpread >= 0.0)
-        require(segmentSlope == null || segmentSlope.isFinite())
-        require(segmentResidual == null || segmentResidual.isFinite())
-        require(incomingSlope == null || incomingSlope.isFinite())
-        require(outgoingSlope == null || outgoingSlope.isFinite())
-        require(segmentSlope != null || segmentResidual == null)
-        if (focalValue != null && stateWeightedMedian != null) {
-            require(focalDistance == abs(focalValue - stateWeightedMedian))
+        require(leaveOneOut.residual == null || inclusive.slope != null)
+        if (focalValue != null && leaveOneOut.stateMedian != null) {
+            require(leaveOneOut.distance == abs(focalValue - leaveOneOut.stateMedian))
         } else {
-            require(focalDistance == null)
+            require(leaveOneOut.distance == null)
         }
     }
 }
@@ -230,7 +281,7 @@ private fun diagnoseCandidate(
     return StateShapeCandidate(
         span = candidate.span,
         wakingSegmentCount = candidate.segments.size,
-        repeatedMembershipCount = placement.repeatedMembershipCount,
+        residences = placement.residences,
         emotions = emotions,
         emotionAbsentCount = members.count { it.emotion.isEmpty() },
         axes = axes,
@@ -239,39 +290,40 @@ private fun diagnoseCandidate(
 
 private data class Placement(
     val members: List<Member>,
-    val repeatedMembershipCount: Int,
+    val residences: List<StateResidence>,
 )
 
 private fun placeMembers(
     candidate: BidirectionalCandidate,
     statesById: Map<String, StateObservationV2>,
 ): Placement {
-    val owners = linkedMapOf<String, Int>()
-    var repeated = 0
-    candidate.segments.forEachIndexed { index, segment ->
-        residentIds(segment, candidate).forEach { id ->
-            val existing = owners[id]
-            if (existing == null) {
-                owners[id] = index
-            } else {
-                repeated += 1
-                if (id == segment.rootStateId && id != candidate.segments[existing].rootStateId) {
-                    owners[id] = index
-                }
+    val claims = candidate.segments.map { segment -> residentIds(segment, candidate) }
+    val admitted = candidate.segments.flatMap { it.statesInSpan }
+        .mapNotNull { candidate.comparableState(it) }
+        .distinct()
+    val residences = mutableListOf<StateResidence>()
+    val members = mutableListOf<Member>()
+    admitted.forEach { id ->
+        val claimedBy = claims.mapIndexedNotNull { index, ids -> index.takeIf { id in ids } }
+        val state = statesById[id]
+        when {
+            claimedBy.size > 1 -> residences += StateResidence(id, StateResidenceKind.AMBIGUOUS, null)
+            claimedBy.size == 1 && state != null -> {
+                val index = claimedBy.single()
+                residences += StateResidence(id, StateResidenceKind.RESIDENT, index)
+                members += Member(
+                    segmentIndex = index,
+                    id = id,
+                    at = state.recordedAt,
+                    emotion = state.emotion,
+                    raw = rawPoints(state),
+                )
             }
+            claimedBy.isEmpty() && state != null ->
+                residences += StateResidence(id, StateResidenceKind.PREDECESSOR_CONTEXT, null)
         }
     }
-    val members = owners.mapNotNull { (id, index) ->
-        val state = statesById[id] ?: return@mapNotNull null
-        Member(
-            segmentIndex = index,
-            id = id,
-            at = state.recordedAt,
-            emotion = state.emotion,
-            raw = rawPoints(state),
-        )
-    }
-    return Placement(members, repeated)
+    return Placement(members, residences)
 }
 
 private fun residentIds(segment: BidirectionalSegment, candidate: BidirectionalCandidate): List<String> {
@@ -324,45 +376,49 @@ private fun diagnoseAxis(
     val focalSegments = candidate.segments.mapIndexedNotNull { index, segment ->
         if (segment.kind == SegmentKind.FOCAL_ORDERED) index else null
     }
-    val slopes = if (focalSegments.size == 1) {
+    val inclusiveSlopes = if (focalSegments.size == 1) {
         val index = focalSegments.single()
         val inSegment = recorded.filter { it.first.segmentIndex == index }
         val full = inSegment.map { TimedValue(it.first.at, it.second) }
         val incoming = inSegment.filter { it.first.at <= focalMember.at }.map { TimedValue(it.first.at, it.second) }
         val outgoing = inSegment.filter { it.first.at >= focalMember.at }.map { TimedValue(it.first.at, it.second) }
-        val slope = pairwiseSlope(full)
-        SlopeSet(
-            segmentSlope = slope,
-            segmentResidual = if (focalValue == null) null else focalResidual(full, focalMember.at, focalValue),
+        val others = inSegment.filter { it.first.id != focalStateId }.map { TimedValue(it.first.at, it.second) }
+        InclusiveSlopes(
+            slope = pairwiseSlope(full),
             incomingSlope = pairwiseSlope(incoming),
             outgoingSlope = pairwiseSlope(outgoing),
+            residual = if (focalValue == null) null else leaveOneOutResidual(others, focalMember.at, focalValue),
         )
     } else {
-        SlopeSet(null, null, null, null)
+        InclusiveSlopes(null, null, null, null)
     }
     return AxisShapeDiagnostic(
         axisId = axisId,
         recordedStateCount = recorded.size,
         wakingSegmentCount = candidate.segments.size,
         focalValue = focalValue,
-        stateWeightedMedian = stateMedian,
-        stateWeightedMad = stateMad,
-        focalDistance = if (focalValue != null && stateMedian != null) abs(focalValue - stateMedian) else null,
-        segmentLevels = levels,
-        segmentBalancedMedian = balanced,
-        segmentMedianSpread = spread,
-        segmentSlope = slopes.segmentSlope,
-        segmentResidual = slopes.segmentResidual,
-        incomingSlope = slopes.incomingSlope,
-        outgoingSlope = slopes.outgoingSlope,
+        leaveOneOut = LeaveOneOutFocalReference(
+            stateMedian = stateMedian,
+            stateMad = stateMad,
+            distance = if (focalValue != null && stateMedian != null) abs(focalValue - stateMedian) else null,
+            residual = inclusiveSlopes.residual,
+        ),
+        inclusive = InclusiveWakingSegmentSummary(
+            levels = levels,
+            balancedMedian = balanced,
+            medianSpread = spread,
+            slope = inclusiveSlopes.slope,
+            incomingSlope = inclusiveSlopes.incomingSlope,
+            outgoingSlope = inclusiveSlopes.outgoingSlope,
+        ),
     )
 }
 
-private data class SlopeSet(
-    val segmentSlope: Double?,
-    val segmentResidual: Double?,
+private data class InclusiveSlopes(
+    val slope: Double?,
     val incomingSlope: Double?,
     val outgoingSlope: Double?,
+    val residual: Double?,
 )
 
 private fun diagnosticMedian(values: List<Double>): Double? {
@@ -386,14 +442,13 @@ private fun pairwiseSlope(points: List<TimedValue>): Double? {
     return diagnosticMedian(slopes)
 }
 
-private fun focalResidual(points: List<TimedValue>, focalAt: Long, focalValue: Double): Double? {
-    val slope = pairwiseSlope(points) ?: return null
-    val intercepts = collapse(points).map { point ->
+private fun leaveOneOutResidual(others: List<TimedValue>, focalAt: Long, focalValue: Double): Double? {
+    val slope = pairwiseSlope(others) ?: return null
+    val predicted = diagnosticMedian(collapse(others).map { point ->
         val hours = (point.at - focalAt).toDouble() / MILLIS_PER_HOUR.toDouble()
         point.value - slope * hours
-    }
-    val intercept = diagnosticMedian(intercepts) ?: return null
-    return focalValue - intercept
+    }) ?: return null
+    return focalValue - predicted
 }
 
 private fun collapse(points: List<TimedValue>): List<TimedValue> {
@@ -428,20 +483,22 @@ private fun auditCandidate(candidate: StateShapeCandidate): String {
 }
 
 private fun auditAxis(axis: AxisShapeDiagnostic): String {
-    val levels = axis.segmentLevels.joinToString(", ") { level ->
+    val levels = axis.inclusive.levels.joinToString(", ") { level ->
         "${kindToken(level.kind)} ${measurement(level.median)}"
     }
     return axis.axisId +
         " · states ${axis.recordedStateCount} · segments ${axis.wakingSegmentCount}\n" +
         "focal ${measurement(axis.focalValue)}\n" +
-        "state median ${measurement(axis.stateWeightedMedian)}" +
-        " · mad ${measurement(axis.stateWeightedMad)}" +
-        " · distance ${measurement(axis.focalDistance)}\n" +
-        "segment medians $levels" +
-        " · balanced ${measurement(axis.segmentBalancedMedian)}" +
-        " · spread ${measurement(axis.segmentMedianSpread)}\n" +
-        "slope ${measurement(axis.segmentSlope)} · residual ${measurement(axis.segmentResidual)}\n" +
-        "incoming ${measurement(axis.incomingSlope)} · outgoing ${measurement(axis.outgoingSlope)}"
+        "leave-one-out median ${measurement(axis.leaveOneOut.stateMedian)}" +
+        " · mad ${measurement(axis.leaveOneOut.stateMad)}" +
+        " · distance ${measurement(axis.leaveOneOut.distance)}\n" +
+        "inclusive segment medians $levels" +
+        " · balanced ${measurement(axis.inclusive.balancedMedian)}" +
+        " · spread ${measurement(axis.inclusive.medianSpread)}\n" +
+        "inclusive slope ${measurement(axis.inclusive.slope)}\n" +
+        "leave-one-out residual ${measurement(axis.leaveOneOut.residual)}\n" +
+        "inclusive incoming ${measurement(axis.inclusive.incomingSlope)}" +
+        " · outgoing ${measurement(axis.inclusive.outgoingSlope)}"
 }
 
 private fun kindToken(kind: SegmentKind): String = when (kind) {
