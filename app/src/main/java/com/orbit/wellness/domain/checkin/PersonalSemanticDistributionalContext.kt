@@ -1,6 +1,8 @@
 package com.orbit.wellness.domain.checkin
 
+import com.orbit.wellness.data.local.DefaultCheckInAxes
 import kotlin.math.abs
+import kotlin.math.round
 import kotlin.math.sqrt
 
 /**
@@ -31,6 +33,7 @@ data class DistributionalContextDataset(
     val method: String,
     val controlProtocol: String = PERSONAL_SEMANTIC_JOINT_EMBEDDING,
     val supportByConcept: Map<String, Int>,
+    val reading: DistributionalReadingIndex = DistributionalReadingIndex(),
     val layers: List<DistributionalLayer>,
     val judgments: List<String>,
     val predictive: Boolean = false,
@@ -142,15 +145,20 @@ data class DistributionalLayer(
         }.sortedWith(compareByDescending<LandmarkContribution> { abs(it.contribution) }.thenBy { it.landmarkId })
     }
 
-    fun occurrenceLists(anchor: String, audit: EmbeddingAuditIndex): DistributionalOccurrenceLists {
+    fun occurrenceLists(
+        anchor: String,
+        audit: EmbeddingAuditIndex,
+        reading: DistributionalReadingIndex = DistributionalReadingIndex(),
+        support: Map<String, Int> = emptyMap(),
+    ): DistributionalOccurrenceLists {
         val incident = audit.incidentTransitions[anchor].orEmpty()
         val focal = audit.focalConcepts[anchor].orEmpty()
         val carried = present(anchor, focal)
         val omitted = focal.filter { node(it) == null }.map { concept ->
-            "${audit.conceptText(concept)} · no distributional coordinate"
+            "${reading.line(concept, audit, support)} · no distributional coordinate"
         }
         val incidentMissing = incident.filter { node(it) == null }.map { transition ->
-            "${audit.recordText(transition)} · no distributional coordinates"
+            "${reading.line(transition, audit)} · no distributional coordinates"
         }
         return DistributionalOccurrenceLists(
             states = ranked(anchor, "state") { it != anchor }.take(5),
@@ -204,12 +212,14 @@ data class DistributionalLayer(
 fun projectDistributionalContext(
     embedding: JointEmbeddingDataset,
     supportByConcept: Map<String, Int> = emptyMap(),
+    projection: PersonalSemanticOccurrenceProjection? = null,
 ): DistributionalContextDataset {
     return DistributionalContextDataset(
         vocabularyScope = embedding.vocabularyScope,
         retrospective = embedding.retrospective,
         method = PERSONAL_SEMANTIC_DISTRIBUTIONAL_METHOD,
         supportByConcept = supportByConcept,
+        reading = distributionalReading(embedding.audit, projection),
         layers = embedding.layers.map { layer -> projectLayer(layer, embedding.audit) },
         judgments = judgments(embedding),
     )
@@ -249,7 +259,7 @@ private fun judgments(embedding: JointEmbeddingDataset): List<String> {
     lines += "The occurrence's own landmark is missing. Partial cosine skips it, so identity similarity does not dominate the profile. Neighbors of an occurrence are explained by the other landmarks."
     lines += "First-order signs are kept. A negative similarity is not clipped and is not written as zero."
     lines += "A concept coordinate is nonzero only where that concept has a first-order value. Overlapping occurrence landmarks can make two concepts close while their direct cosine stays zero. Concepts on disjoint occurrences stay at similarity zero even when those occurrences are similar. The occurrence kernel is not applied a second time."
-    lines += "Vocabulary support is audit metadata and is not a landmark coordinate. Aliases and recorded labels stay on the audit."
+    lines += "Vocabulary support is audit metadata and is not a landmark coordinate. The neighborhood uses aliases and recorded labels. Canonical ids and typed keys stay in the provenance index."
     lines += "The joint-embedding baseline stays the first-order control."
     embedding.layers.filter { it.unreliable }.forEach { layer ->
         lines += "${layer.name}: ${layer.unreliableBecause}"
@@ -257,3 +267,170 @@ private fun judgments(embedding: JointEmbeddingDataset): List<String> {
     lines += "This measurement does not cluster, name a region, recommend, or estimate a causal effect."
     return lines
 }
+
+data class ProvenanceEntry(
+    val alias: String,
+    val kind: String,
+    val canonical: String,
+) {
+    fun text(): String = when (kind) {
+        "concept" -> "$alias · $canonical"
+        else -> "$alias · $kind · $canonical"
+    }
+}
+
+data class DistributionalReadingIndex(
+    val neighborhoodByNode: Map<String, String> = emptyMap(),
+    val provenance: List<ProvenanceEntry> = emptyList(),
+) {
+    fun line(nodeId: String, audit: EmbeddingAuditIndex, support: Map<String, Int> = emptyMap()): String {
+        if (nodeId.startsWith("concept:")) {
+            val base = neighborhoodByNode[nodeId] ?: conceptFallback(nodeId)
+            val count = support[nodeId] ?: return base
+            return "$base · support $count"
+        }
+        return neighborhoodByNode[nodeId] ?: audit.aliasByNode[nodeId] ?: occurrenceKind(nodeId)
+    }
+}
+
+fun formatDistributionalSimilarity(value: Double): String = formatAuditNumber(value, leadingPlus = false)
+
+fun formatDistributionalContribution(value: Double): String = formatAuditNumber(value, leadingPlus = true)
+
+private fun distributionalReading(
+    audit: EmbeddingAuditIndex,
+    projection: PersonalSemanticOccurrenceProjection?,
+): DistributionalReadingIndex {
+    val neighborhood = mutableMapOf<String, String>()
+    val provenance = mutableListOf<ProvenanceEntry>()
+    val states = projection?.states?.associateBy { stateNodeId(it.key.raw) }.orEmpty()
+    val transitions = projection?.transitions?.associateBy { transitionNodeId(it.key.raw) }.orEmpty()
+    val labelsByTransition = projection?.links.orEmpty()
+        .filterIsInstance<ConceptObservationLink.OnTransition>()
+        .groupBy { transitionNodeId(it.key.raw) }
+    audit.aliasByNode.toList().sortedBy { it.second }.forEach { (nodeId, alias) ->
+        val canonical = audit.canonicalByNode[nodeId] ?: return@forEach
+        val kind = occurrenceKind(nodeId)
+        neighborhood[nodeId] = when (kind) {
+            "state" -> stateSummary(alias, states[nodeId])
+            "transition" -> transitionSummary(alias, transitions[nodeId], labelsByTransition[nodeId].orEmpty(), audit)
+            else -> alias
+        }
+        provenance += ProvenanceEntry(alias, kind, canonical)
+    }
+    audit.labelByConcept.toList().sortedBy { it.second }.forEach { (nodeId, label) ->
+        val token = nodeId.removePrefix("concept:")
+        val heading = conceptSummary(label, token)
+        neighborhood[nodeId] = heading
+        provenance += ProvenanceEntry(heading, "concept", token)
+    }
+    return DistributionalReadingIndex(neighborhood, provenance)
+}
+
+private fun stateSummary(alias: String, state: StateOccurrenceProjection?): String {
+    if (state == null) return alias
+    val parts = mutableListOf(alias)
+    state.emotion?.name?.takeIf { it.isNotBlank() }?.let { parts += it }
+    val axes = axisSummary(state.axes)
+    if (axes.isNotEmpty()) parts += axes
+    return parts.joinToString(" · ")
+}
+
+private fun axisSummary(axes: List<AxisOccurrence>): String {
+    return listOf(
+        DefaultCheckInAxes.MOOD to "M",
+        DefaultCheckInAxes.ENERGY to "E",
+        DefaultCheckInAxes.CONFIDENCE to "C",
+        DefaultCheckInAxes.ANXIETY to "A",
+    ).mapNotNull { (axisId, letter) ->
+        val axis = axes.firstOrNull { it.axisId == axisId } ?: return@mapNotNull null
+        val raw = axis.raw
+        if (axis.status != AxisOccurrenceStatus.OBSERVED || raw == null) return@mapNotNull null
+        "$letter$raw"
+    }.joinToString(" ")
+}
+
+private fun transitionSummary(
+    alias: String,
+    transition: TransitionOccurrenceProjection?,
+    links: List<ConceptObservationLink.OnTransition>,
+    audit: EmbeddingAuditIndex,
+): String {
+    if (transition == null) return alias
+    val parts = mutableListOf(alias)
+    val labels = links.map { it.label }.filter { it.isNotBlank() }.distinct()
+    if (labels.isNotEmpty()) {
+        val shown = labels.take(PRINCIPAL_LABELS)
+        val extra = labels.size - shown.size
+        parts += shown.joinToString(", ") + if (extra > 0) " +$extra" else ""
+    }
+    val startAlias = transition.startStateKey?.let { audit.aliasByNode[stateNodeId(it.raw)] }
+    val endAlias = audit.aliasByNode[stateNodeId(transition.endStateKey.raw)]
+    endpointSummary(startAlias, endAlias, transition.boundary)?.let { parts += it }
+    durationSummary(transition)?.let { parts += it }
+    return parts.joinToString(" · ")
+}
+
+private fun endpointSummary(startAlias: String?, endAlias: String?, boundary: Boolean): String? {
+    return when {
+        startAlias != null && endAlias != null -> "$startAlias→$endAlias"
+        endAlias != null && boundary -> "boundary→$endAlias"
+        endAlias != null -> "→$endAlias"
+        startAlias != null -> "$startAlias→"
+        else -> null
+    }
+}
+
+private fun durationSummary(transition: TransitionOccurrenceProjection): String? {
+    if (!transition.completed || transition.durationMillis <= 0L) return null
+    if (transition.endAt < transition.startAt) return null
+    if (transition.durationMillis != transition.endAt - transition.startAt) return null
+    val minutes = transition.durationMillis / 60_000L
+    val hours = minutes / 60L
+    val remainder = minutes % 60L
+    return when {
+        hours > 0L && remainder == 0L -> "${hours}h"
+        hours > 0L -> "${hours}h ${remainder}m"
+        minutes > 0L -> "${minutes}m"
+        else -> {
+            val seconds = transition.durationMillis / 1_000L
+            if (seconds > 0L) "${seconds}s" else null
+        }
+    }
+}
+
+private fun conceptSummary(label: String, token: String): String {
+    val type = friendlyType(token)
+    val intent = conceptIntent(token)
+    val readable = label.takeIf { it.isNotBlank() && '|' !in it && !it.startsWith("option:") }
+    val head = readable ?: type
+    return listOfNotNull(head, type.takeIf { it != head }, intent).joinToString(" · ")
+}
+
+private fun conceptFallback(nodeId: String): String = friendlyType(nodeId.removePrefix("concept:"))
+
+private fun friendlyType(token: String): String {
+    val name = token.substringBefore('|')
+    return SemanticConceptType.entries.firstOrNull { it.name == name }?.auditLabel() ?: "concept"
+}
+
+private fun conceptIntent(token: String): String? {
+    val rest = token.substringAfter('|', "")
+    if ('|' !in rest) return null
+    return rest.substringAfterLast('|').takeIf { it.isNotBlank() }
+}
+
+private fun occurrenceKind(nodeId: String): String = when {
+    nodeId.startsWith("state:") -> "state"
+    nodeId.startsWith("transition:") -> "transition"
+    else -> "concept"
+}
+
+private fun formatAuditNumber(value: Double, leadingPlus: Boolean): String {
+    val rounded = round(value * 1000.0) / 1000.0
+    if (rounded == 0.0) return "0.0"
+    val text = rounded.toString()
+    return if (leadingPlus && rounded > 0.0) "+$text" else text
+}
+
+private const val PRINCIPAL_LABELS = 3

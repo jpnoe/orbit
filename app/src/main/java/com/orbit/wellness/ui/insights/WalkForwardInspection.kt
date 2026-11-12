@@ -18,6 +18,8 @@ import com.orbit.wellness.domain.checkin.projectPersonalSemanticOccurrences
 import com.orbit.wellness.domain.checkin.DistributionalContextDataset
 import com.orbit.wellness.domain.checkin.JointEmbeddingDataset
 import com.orbit.wellness.domain.checkin.conceptNodeId
+import com.orbit.wellness.domain.checkin.MaskedConceptReconstructionDataset
+import com.orbit.wellness.domain.checkin.evaluateMaskedConceptReconstruction
 import com.orbit.wellness.domain.checkin.projectDistributionalContext
 import com.orbit.wellness.domain.checkin.projectJointSemanticEmbedding
 import com.orbit.wellness.domain.checkin.projectReciprocalSignatures
@@ -50,6 +52,7 @@ data class PredictionLabSnapshot(
     val signatures: ReciprocalSignatureDataset,
     val embedding: JointEmbeddingDataset,
     val distributional: DistributionalContextDataset,
+    val reconstruction: MaskedConceptReconstructionDataset,
 ) {
     val walkForward get() = examples.walkForward
     val observationProcess get() = examples.observationProcess
@@ -94,6 +97,13 @@ fun observeWalkForward(
                 vocabulary = retrospectiveVocabulary(occurrences),
             )
             val embedding = projectJointSemanticEmbedding(signatures, graph, occurrences)
+            val distributional = projectDistributionalContext(
+                embedding = embedding,
+                supportByConcept = signatures.vocabulary.concepts.associate { concept ->
+                    conceptNodeId(concept.key) to concept.backboneSupport
+                },
+                projection = occurrences,
+            )
             val evidence = projectRetrospectiveMultiscaleBidirectionalEvidence(snapshot.dataset, zone)
             val diagnostics = projectRetrospectiveStateShapeDiagnostics(snapshot.dataset, evidence)
             PredictionLabSnapshot(
@@ -106,11 +116,13 @@ fun observeWalkForward(
                 occurrences = occurrences,
                 signatures = signatures,
                 embedding = embedding,
-                distributional = projectDistributionalContext(
-                    embedding = embedding,
-                    supportByConcept = signatures.vocabulary.concepts.associate { concept ->
-                        conceptNodeId(concept.key) to concept.backboneSupport
-                    },
+                distributional = distributional,
+                reconstruction = evaluateMaskedConceptReconstruction(
+                    projection = occurrences,
+                    graph = graph,
+                    signatures = signatures,
+                    audit = embedding.audit,
+                    reading = distributional.reading,
                 ),
             )
         }

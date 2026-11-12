@@ -143,6 +143,51 @@ class PersonalSemanticDistributionalContextTest {
     }
 
     @Test
+    fun theNeighborhoodUsesAliasesAndProvenanceKeepsTheRecord() {
+        val stateId = "11111111-2222-3333-4444-555555555555"
+        val optionId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        val fitted = fit(readableHistory(stateId, optionId, completed = true))
+        val audit = fitted.embedding.audit
+        val reading = fitted.context.reading
+        val hopeful = stateNodeId(stateId)
+        val transition = transitionNodeId(stateId)
+        val coding = conceptNodeId(ConceptIdentityKey(SemanticConceptType.ACTIVITY, "option:$optionId"))
+        assertEquals("S02 · Hopeful · M6 E6 C4 A4", reading.line(hopeful, audit))
+        assertEquals("S01 · M0", reading.line(stateNodeId("start"), audit))
+        assertEquals("T01 · Coding, Coffee, Reading +1 · S01→S02 · 2h", reading.line(transition, audit))
+        assertEquals("Coding · activity · support 1", reading.line(coding, audit, fitted.context.supportByConcept))
+        reading.neighborhoodByNode.values.forEach { line ->
+            assertFalse(line, line.contains(stateId) || line.contains(optionId))
+        }
+        assertFalse(reading.line(coding, audit, fitted.context.supportByConcept).contains(optionId))
+        val provenance = reading.provenance.map { it.text() }
+        assertTrue(provenance.contains("S02 · state · $stateId"))
+        assertTrue(provenance.contains("T01 · transition · $stateId"))
+        assertTrue(provenance.any { it.contains("ACTIVITY|option:$optionId|") })
+        val omitted = fit(readableHistory(stateId, optionId, completed = false))
+        assertFalse(omitted.context.reading.line(transition, omitted.embedding.audit).contains("2h"))
+        val withoutReading = projectDistributionalContext(fitted.embedding, fitted.context.supportByConcept)
+        assertSameProfiles(fitted.context.layer(LAYER_ZERO), withoutReading.layer(LAYER_ZERO))
+        assertEquals(
+            fitted.context.layer(LAYER_ZERO).occurrenceLists(hopeful, audit, reading, fitted.context.supportByConcept).states.map { it.id },
+            withoutReading.layer(LAYER_ZERO).occurrenceLists(hopeful, audit).states.map { it.id },
+        )
+        val listed = fitted.context.layer(LAYER_ZERO).occurrenceLists(
+            stateNodeId("start"),
+            audit,
+            reading,
+            fitted.context.supportByConcept,
+        )
+        (listed.states + listed.incidentTransitions + listed.noncarriedConcepts).forEach { neighbor ->
+            assertTrue(neighbor.landmarks.size <= 4)
+        }
+        assertEquals("+0.027", formatDistributionalContribution(0.027))
+        assertEquals("-0.021", formatDistributionalContribution(-0.021))
+        assertEquals("0.451", formatDistributionalSimilarity(0.451))
+        assertEquals("0.0", formatDistributionalContribution(0.0))
+    }
+
+    @Test
     fun theMeasurementStaysOutsideThePredictorAndTheLabCanShowIt() {
         val source = source(
             "src/main/java/com/orbit/wellness/domain/checkin/PersonalSemanticDistributionalContext.kt",
@@ -169,6 +214,7 @@ class PersonalSemanticDistributionalContextTest {
             "app/src/main/java/com/orbit/wellness/ui/insights/DistributionalContextSection.kt",
         ).readText()
         assertTrue(section.contains("Distributional context"))
+        assertTrue(section.contains("Exact provenance"))
         assertTrue(section.contains("support"))
         val fitted = fit(runningHistory())
         assertFalse(fitted.context.predictive || fitted.context.updatesModel || fitted.context.suitableForRecommendation)
@@ -226,7 +272,7 @@ class PersonalSemanticDistributionalContextTest {
             projection = projection,
         )
         val support = vocabulary.concepts.associate { conceptNodeId(it.key) to it.backboneSupport }
-        return Fitted(embedding, projectDistributionalContext(embedding, support))
+        return Fitted(embedding, projectDistributionalContext(embedding, support, projection))
     }
 
     private fun runningHistory(): CheckInAnalysisDatasetV2 {
@@ -288,6 +334,54 @@ class PersonalSemanticDistributionalContextTest {
                 activityInterval("d1", "up", 2 * HOUR, 4 * HOUR, listOf(outOfUp)),
                 activityInterval("extra", "s3", 6 * HOUR, 8 * HOUR, listOf("coding")),
             ),
+        )
+    }
+
+    private fun readableHistory(stateId: String, optionId: String, completed: Boolean): CheckInAnalysisDatasetV2 {
+        val endAt = 2 * HOUR
+        return history(
+            states = listOf(
+                state("start", 0L, mood = 0, emotion = ""),
+                hopefulState(stateId, endAt),
+            ),
+            intervals = listOf(
+                interval(
+                    end = stateId,
+                    previous = "start",
+                    start = 0L,
+                    endAt = endAt,
+                    activity = ActivityCategoryObservationV2(
+                        CategoryObservationKindV2.ENTRIES,
+                        endAt,
+                        listOf(
+                            ActivityObservationV2("coding", optionId, "Coding", endAt),
+                            ActivityObservationV2("coffee", null, "Coffee", endAt),
+                            ActivityObservationV2("reading", null, "Reading", endAt),
+                            ActivityObservationV2("songwriting", null, "Songwriting", endAt),
+                        ),
+                    ),
+                ).copy(completedAt = if (completed) endAt else null),
+            ),
+        )
+    }
+
+    private fun hopefulState(id: String, at: Long): StateObservationV2 {
+        val mood = AxisReadingV2(DefaultCheckInAxes.MOOD, 6, 0.6)
+        val energy = AxisReadingV2(DefaultCheckInAxes.ENERGY, 6, 0.6)
+        val confidence = AxisReadingV2(DefaultCheckInAxes.CONFIDENCE, 4, 0.4)
+        val anxiety = AxisReadingV2(DefaultCheckInAxes.ANXIETY, 4, 0.4)
+        return StateObservationV2(
+            checkInId = id,
+            recordedAt = at,
+            localDate = "2026-01-15",
+            axes = mapOf(
+                mood.axisId to mood,
+                energy.axisId to energy,
+                confidence.axisId to confidence,
+                anxiety.axisId to anxiety,
+            ),
+            core = CoreAxisViewV2(mood, energy, confidence, anxiety),
+            emotion = "Hopeful",
         )
     }
 

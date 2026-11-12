@@ -25,6 +25,8 @@ private val ELIGIBLE_CONCEPT_TYPES = setOf(
     SemanticConceptType.CONTEXTUAL_USAGE,
 )
 
+fun isEligibleConceptType(type: SemanticConceptType): Boolean = type in ELIGIBLE_CONCEPT_TYPES
+
 enum class FeatureNamespace {
     NUMERIC,
     CONCEPT,

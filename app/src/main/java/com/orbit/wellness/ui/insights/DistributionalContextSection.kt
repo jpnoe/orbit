@@ -19,9 +19,11 @@ import androidx.compose.ui.unit.dp
 import com.orbit.wellness.domain.checkin.DistributionalContextDataset
 import com.orbit.wellness.domain.checkin.DistributionalLayer
 import com.orbit.wellness.domain.checkin.DistributionalNeighbor
+import com.orbit.wellness.domain.checkin.DistributionalReadingIndex
 import com.orbit.wellness.domain.checkin.EmbeddingAuditIndex
+import com.orbit.wellness.domain.checkin.formatDistributionalContribution
+import com.orbit.wellness.domain.checkin.formatDistributionalSimilarity
 import com.orbit.wellness.domain.checkin.stateNodeId
-import kotlin.math.round
 
 @Composable
 fun DistributionalContextSection(
@@ -41,9 +43,10 @@ fun DistributionalContextSection(
         )
         Text(context.method, style = MaterialTheme.typography.bodySmall)
         context.layers.forEach { layer ->
-            StateLayerCard(layer, audit, context.supportByConcept, stateNodeId(stateId))
+            StateLayerCard(layer, audit, context.reading, context.supportByConcept, stateNodeId(stateId))
         }
         ConceptAnchor(context, audit)
+        ProvenanceIndex(context.reading)
         Notes(context.judgments)
     }
 }
@@ -52,6 +55,7 @@ fun DistributionalContextSection(
 private fun StateLayerCard(
     layer: DistributionalLayer,
     audit: EmbeddingAuditIndex,
+    reading: DistributionalReadingIndex,
     support: Map<String, Int>,
     anchor: String,
 ) {
@@ -60,26 +64,27 @@ private fun StateLayerCard(
         Text("${layerTitle(layer.name)} · ${layer.dimensionality} occurrence landmarks")
     }
     if (!open) return
-    Header(layer, audit.recordText(anchor))
+    Header(layer, reading.line(anchor, audit))
     if (layer.node(anchor) == null) {
         Text("This anchor has no distributional coordinates in this fit.", style = MaterialTheme.typography.bodyMedium)
         return
     }
-    val lists = layer.occurrenceLists(anchor, audit)
-    NeighborBlock("Nearest states", lists.states, audit, support)
+    val lists = layer.occurrenceLists(anchor, audit, reading, support)
+    NeighborBlock("Nearest states", lists.states, audit, reading, support)
     NeighborBlock(
         "Directly incident transitions",
         lists.incidentTransitions,
         audit,
+        reading,
         support,
         extras = lists.incidentWithoutCoordinates,
     )
-    NeighborBlock("Nearest nonincident transitions", lists.nonincidentTransitions, audit, support)
-    NeighborBlock("Directly carried concepts", lists.carriedConcepts, audit, support)
+    NeighborBlock("Nearest nonincident transitions", lists.nonincidentTransitions, audit, reading, support)
+    NeighborBlock("Directly carried concepts", lists.carriedConcepts, audit, reading, support)
     lists.carriedWithoutCoordinates.forEach { line ->
         Text(line, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 16.dp))
     }
-    NeighborBlock("Nearest noncarried concepts", lists.noncarriedConcepts, audit, support)
+    NeighborBlock("Nearest noncarried concepts", lists.noncarriedConcepts, audit, reading, support)
 }
 
 @Composable
@@ -87,7 +92,7 @@ private fun ConceptAnchor(context: DistributionalContextDataset, audit: Embeddin
     val concepts = context.layers
         .flatMap { layer -> layer.nodes.filter { it.kind == "concept" }.map { it.id } }
         .distinct()
-        .sortedWith(compareBy({ audit.conceptText(it) }, { it }))
+        .sortedWith(compareBy({ context.reading.neighborhoodByNode[it] ?: it }, { it }))
     var open by remember { mutableStateOf(false) }
     TextButton(onClick = { open = !open }) {
         Text("Concept anchor")
@@ -103,13 +108,13 @@ private fun ConceptAnchor(context: DistributionalContextDataset, audit: Embeddin
         TextButton(onClick = { index = (index - 1).coerceIn(0, concepts.lastIndex) }) { Text("Previous") }
         TextButton(onClick = { index = (index + 1).coerceIn(0, concepts.lastIndex) }) { Text("Next") }
     }
-    Text(conceptLabel(concept, audit, context.supportByConcept), style = MaterialTheme.typography.bodyMedium)
+    Text(context.reading.line(concept, audit, context.supportByConcept), style = MaterialTheme.typography.bodyMedium)
     Text(
         "Nearest concepts share occurrence landmarks. Disjoint occurrences stay apart. A directly carried record stays on its own list.",
         style = MaterialTheme.typography.bodySmall,
     )
     context.layers.forEach { layer ->
-        ConceptLayerCard(layer, audit, context.supportByConcept, concept)
+        ConceptLayerCard(layer, audit, context.reading, context.supportByConcept, concept)
     }
 }
 
@@ -117,6 +122,7 @@ private fun ConceptAnchor(context: DistributionalContextDataset, audit: Embeddin
 private fun ConceptLayerCard(
     layer: DistributionalLayer,
     audit: EmbeddingAuditIndex,
+    reading: DistributionalReadingIndex,
     support: Map<String, Int>,
     concept: String,
 ) {
@@ -130,11 +136,11 @@ private fun ConceptLayerCard(
         return
     }
     val lists = layer.conceptLists(concept, audit)
-    NeighborBlock("Directly carried states", lists.directStates, audit, support)
-    NeighborBlock("Nearest states", lists.nearestStates, audit, support)
-    NeighborBlock("Directly carried transitions", lists.directTransitions, audit, support)
-    NeighborBlock("Nearest transitions", lists.nearestTransitions, audit, support)
-    NeighborBlock("Nearest concepts", lists.nearestConcepts, audit, support)
+    NeighborBlock("Directly carried states", lists.directStates, audit, reading, support)
+    NeighborBlock("Nearest states", lists.nearestStates, audit, reading, support)
+    NeighborBlock("Directly carried transitions", lists.directTransitions, audit, reading, support)
+    NeighborBlock("Nearest transitions", lists.nearestTransitions, audit, reading, support)
+    NeighborBlock("Nearest concepts", lists.nearestConcepts, audit, reading, support)
 }
 
 @Composable
@@ -154,6 +160,7 @@ private fun NeighborBlock(
     title: String,
     neighbors: List<DistributionalNeighbor>,
     audit: EmbeddingAuditIndex,
+    reading: DistributionalReadingIndex,
     support: Map<String, Int>,
     emptyText: String = "None.",
     extras: List<String> = emptyList(),
@@ -168,17 +175,33 @@ private fun NeighborBlock(
     }
     neighbors.forEach { neighbor ->
         Text(
-            "${label(neighbor.id, audit, support)} · similarity ${formatSigned(neighbor.similarity)}",
+            "${reading.line(neighbor.id, audit, support)} · similarity ${formatDistributionalSimilarity(neighbor.similarity)}",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.fillMaxWidth().padding(start = 16.dp),
         )
         neighbor.landmarks.forEach { landmark ->
             Text(
-                "${audit.recordText(landmark.landmarkId)} · contribution ${formatSigned(landmark.contribution)}",
+                "${reading.line(landmark.landmarkId, audit)} · contribution ${formatDistributionalContribution(landmark.contribution)}",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.fillMaxWidth().padding(start = 28.dp),
             )
         }
+    }
+}
+
+@Composable
+private fun ProvenanceIndex(reading: DistributionalReadingIndex) {
+    var open by remember { mutableStateOf(false) }
+    TextButton(onClick = { open = !open }) {
+        Text("Exact provenance")
+    }
+    if (!open) return
+    if (reading.provenance.isEmpty()) {
+        Text("None.", style = MaterialTheme.typography.bodySmall)
+        return
+    }
+    reading.provenance.forEach { entry ->
+        Text(entry.text(), style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth())
     }
 }
 
@@ -200,17 +223,3 @@ private fun layerTitle(name: String): String = when (name) {
     else -> name
 }
 
-private fun label(nodeId: String, audit: EmbeddingAuditIndex, support: Map<String, Int>): String {
-    return if (nodeId.startsWith("concept:")) conceptLabel(nodeId, audit, support) else audit.recordText(nodeId)
-}
-
-private fun conceptLabel(nodeId: String, audit: EmbeddingAuditIndex, support: Map<String, Int>): String {
-    val text = audit.conceptText(nodeId)
-    val count = support[nodeId] ?: return text
-    return "$text · support $count"
-}
-
-private fun formatSigned(value: Double): String {
-    val rounded = round(value * 1000.0) / 1000.0
-    return if (rounded == 0.0) "0.0" else rounded.toString()
-}
