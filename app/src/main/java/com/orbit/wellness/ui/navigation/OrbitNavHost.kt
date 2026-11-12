@@ -450,6 +450,9 @@ fun OrbitApp(
                     val walkForwardViewModel: WalkForwardViewModel = viewModel(
                         factory = WalkForwardViewModel.Factory(
                             repository = application.checkInAnalysisRepository,
+                            sleep = application.sleepRepository,
+                            substances = application.substanceRepository,
+                            wearables = application.wearableObservationRepository,
                         ),
                     )
                     ResearchPreviewScreen(

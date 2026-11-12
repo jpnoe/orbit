@@ -38,6 +38,7 @@ import com.orbit.wellness.domain.checkin.BidirectionalEvidenceDataset
 import com.orbit.wellness.domain.checkin.BidirectionalSpan
 import com.orbit.wellness.domain.checkin.CausalPredecessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDataset
+import com.orbit.wellness.domain.checkin.PersonalSemanticOccurrenceProjection
 import com.orbit.wellness.domain.checkin.StateShapeDiagnosticDataset
 import com.orbit.wellness.domain.checkin.StateShapeEvidenceDataset
 import com.orbit.wellness.domain.checkin.formatShapeEvidenceValue
@@ -132,6 +133,7 @@ fun PredictionResearchPane(walkForwardViewModel: WalkForwardViewModel) {
             bidirectionalEvidence = state.bidirectionalEvidence,
             stateShapeDiagnostics = state.stateShapeDiagnostics,
             stateShapeEvidence = state.stateShapeEvidence,
+            occurrences = state.occurrences,
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -145,6 +147,7 @@ private fun PredictionLab(
     bidirectionalEvidence: BidirectionalEvidenceDataset,
     stateShapeDiagnostics: StateShapeDiagnosticDataset,
     stateShapeEvidence: StateShapeEvidenceDataset,
+    occurrences: PersonalSemanticOccurrenceProjection,
     modifier: Modifier = Modifier,
 ) {
     val projection = bundle.walkForward
@@ -173,6 +176,7 @@ private fun PredictionLab(
                 bidirectionalEvidence,
                 stateShapeDiagnostics,
                 stateShapeEvidence,
+                occurrences,
             )
             PredictionLabMode.SANDBOX -> PredictionSandboxPane(
                 projection.anchors,
@@ -191,12 +195,14 @@ private fun RecordedReplayPane(
     bidirectionalEvidence: BidirectionalEvidenceDataset,
     stateShapeDiagnostics: StateShapeDiagnosticDataset,
     stateShapeEvidence: StateShapeEvidenceDataset,
+    occurrences: PersonalSemanticOccurrenceProjection,
 ) {
     val projection = bundle.walkForward
     val observationProcess = bundle.observationProcess
     val evaluation = projection.evaluation
     var showMetrics by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        OccurrenceProjectionSection(occurrences)
         Text(PredictionLabCopy.REPLAY_NOTICE)
         if (evaluation.attempts.isEmpty()) {
             Text(PredictionLabCopy.NO_ATTEMPTS)

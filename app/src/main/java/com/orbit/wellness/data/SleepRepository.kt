@@ -17,6 +17,8 @@ class SleepRepository(
         return dao.observeBetween(startDate, endDate)
     }
 
+    fun observeAll(): Flow<List<SleepEvent>> = dao.observeAll()
+
     suspend fun logSleep(
         bedtime: Long,
         wakeTime: Long,

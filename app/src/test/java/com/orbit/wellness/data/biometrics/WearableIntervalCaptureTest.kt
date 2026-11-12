@@ -354,5 +354,6 @@ class WearableIntervalCaptureTest {
         override suspend fun getForDate(localDate: String): SleepEvent? = rows[localDate]
         override fun observeBetween(startDate: String, endDate: String): Flow<List<SleepEvent>> = flowOf(emptyList())
         override suspend fun getLatest(): SleepEvent? = rows.values.maxByOrNull { it.wakeTime }
+        override fun observeAll(): Flow<List<SleepEvent>> = flowOf(rows.values.sortedBy { it.wakeTime })
     }
 }

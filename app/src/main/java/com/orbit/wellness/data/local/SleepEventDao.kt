@@ -41,4 +41,7 @@ interface SleepEventDao {
         """,
     )
     suspend fun getLatest(): SleepEvent?
+
+    @Query("SELECT * FROM sleep_events ORDER BY wakeTime")
+    fun observeAll(): Flow<List<SleepEvent>>
 }

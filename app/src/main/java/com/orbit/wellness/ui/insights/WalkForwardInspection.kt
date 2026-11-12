@@ -1,13 +1,18 @@
 package com.orbit.wellness.ui.insights
 
 import com.orbit.wellness.data.CheckInAnalysisSnapshot
+import com.orbit.wellness.data.local.SleepEvent
+import com.orbit.wellness.data.local.SubstanceUseEvent
+import com.orbit.wellness.data.local.WearableObservation
 import com.orbit.wellness.domain.checkin.BidirectionalEvidenceDataset
 import com.orbit.wellness.domain.checkin.CausalPredecessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.CheckInAnalysisDatasetV2
 import com.orbit.wellness.domain.checkin.ForecastExampleBundle
+import com.orbit.wellness.domain.checkin.PersonalSemanticOccurrenceProjection
 import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.projectCausalPredecessorNeighborhood
 import com.orbit.wellness.domain.checkin.projectForecastExamples
+import com.orbit.wellness.domain.checkin.projectPersonalSemanticOccurrences
 import com.orbit.wellness.domain.checkin.StateShapeDiagnosticDataset
 import com.orbit.wellness.domain.checkin.StateShapeEvidenceDataset
 import com.orbit.wellness.domain.checkin.projectRetrospectiveMultiscaleBidirectionalEvidence
@@ -18,7 +23,9 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.mapLatest
 import java.time.ZoneId
@@ -30,6 +37,7 @@ data class PredictionLabSnapshot(
     val bidirectionalEvidence: BidirectionalEvidenceDataset,
     val stateShapeDiagnostics: StateShapeDiagnosticDataset,
     val stateShapeEvidence: StateShapeEvidenceDataset,
+    val occurrences: PersonalSemanticOccurrenceProjection,
 ) {
     val walkForward get() = examples.walkForward
     val observationProcess get() = examples.observationProcess
@@ -46,15 +54,21 @@ data class PredictionLabSnapshot(
 @OptIn(ExperimentalCoroutinesApi::class)
 fun observeWalkForward(
     snapshots: Flow<CheckInAnalysisSnapshot>,
+    sleep: Flow<List<SleepEvent>> = flowOf(emptyList()),
+    substances: Flow<List<SubstanceUseEvent>> = flowOf(emptyList()),
+    wearables: Flow<List<WearableObservation>> = flowOf(emptyList()),
     computation: CoroutineDispatcher = Dispatchers.Default,
     zone: ZoneId = ZoneId.systemDefault(),
     project: suspend (CheckInAnalysisDatasetV2) -> ForecastExampleBundle = { dataset ->
         projectForecastExamples(dataset)
     },
 ): Flow<PredictionLabSnapshot> {
-    return snapshots
+    return combine(snapshots, sleep, substances, wearables) { snapshot, sleepEvents, substanceEvents, wearableRows ->
+        OccurrenceAuditInputs(snapshot, sleepEvents, substanceEvents, wearableRows)
+    }
         .distinctUntilChanged()
-        .mapLatest { snapshot ->
+        .mapLatest { input ->
+            val snapshot = input.snapshot
             val evidence = projectRetrospectiveMultiscaleBidirectionalEvidence(snapshot.dataset, zone)
             val diagnostics = projectRetrospectiveStateShapeDiagnostics(snapshot.dataset, evidence)
             PredictionLabSnapshot(
@@ -64,7 +78,20 @@ fun observeWalkForward(
                 bidirectionalEvidence = evidence,
                 stateShapeDiagnostics = diagnostics,
                 stateShapeEvidence = projectRetrospectiveStateShapeEvidence(diagnostics),
+                occurrences = projectPersonalSemanticOccurrences(
+                    dataset = snapshot.dataset,
+                    sleep = input.sleep,
+                    substances = input.substances,
+                    wearables = input.wearables,
+                ),
             )
         }
         .flowOn(computation)
 }
+
+private data class OccurrenceAuditInputs(
+    val snapshot: CheckInAnalysisSnapshot,
+    val sleep: List<SleepEvent>,
+    val substances: List<SubstanceUseEvent>,
+    val wearables: List<WearableObservation>,
+)

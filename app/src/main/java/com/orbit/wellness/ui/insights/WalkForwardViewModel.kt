@@ -4,10 +4,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.orbit.wellness.data.CheckInAnalysisRepository
+import com.orbit.wellness.data.SleepRepository
+import com.orbit.wellness.data.SubstanceRepository
+import com.orbit.wellness.data.WearableObservationRepository
 import com.orbit.wellness.domain.checkin.BidirectionalEvidenceDataset
 import com.orbit.wellness.domain.checkin.CausalPredecessorNeighborhoodDataset
 import com.orbit.wellness.domain.checkin.ForecastExampleBundle
 import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDataset
+import com.orbit.wellness.domain.checkin.PersonalSemanticOccurrenceProjection
 import com.orbit.wellness.domain.checkin.StateShapeDiagnosticDataset
 import com.orbit.wellness.domain.checkin.StateShapeEvidenceDataset
 import kotlinx.coroutines.flow.SharingStarted
@@ -27,6 +31,7 @@ sealed interface WalkForwardUiState {
         val bidirectionalEvidence: BidirectionalEvidenceDataset,
         val stateShapeDiagnostics: StateShapeDiagnosticDataset,
         val stateShapeEvidence: StateShapeEvidenceDataset,
+        val occurrences: PersonalSemanticOccurrenceProjection,
     ) : WalkForwardUiState
 }
 
@@ -38,8 +43,16 @@ sealed interface WalkForwardUiState {
  */
 class WalkForwardViewModel(
     analysis: CheckInAnalysisRepository,
+    sleep: SleepRepository,
+    substances: SubstanceRepository,
+    wearables: WearableObservationRepository,
 ) : ViewModel() {
-    val uiState: StateFlow<WalkForwardUiState> = observeWalkForward(analysis.observeSnapshot())
+    val uiState: StateFlow<WalkForwardUiState> = observeWalkForward(
+        snapshots = analysis.observeSnapshot(),
+        sleep = sleep.observeAll(),
+        substances = substances.observeEvents(),
+        wearables = wearables.observe(),
+    )
         .map<PredictionLabSnapshot, WalkForwardUiState> { snapshot ->
             WalkForwardUiState.Ready(
                 projection = snapshot.walkForward,
@@ -50,6 +63,7 @@ class WalkForwardViewModel(
                 bidirectionalEvidence = snapshot.bidirectionalEvidence,
                 stateShapeDiagnostics = snapshot.stateShapeDiagnostics,
                 stateShapeEvidence = snapshot.stateShapeEvidence,
+                occurrences = snapshot.occurrences,
             )
         }
         .stateIn(
@@ -60,10 +74,13 @@ class WalkForwardViewModel(
 
     class Factory(
         private val repository: CheckInAnalysisRepository,
+        private val sleep: SleepRepository,
+        private val substances: SubstanceRepository,
+        private val wearables: WearableObservationRepository,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return WalkForwardViewModel(repository) as T
+            return WalkForwardViewModel(repository, sleep, substances, wearables) as T
         }
     }
 }
