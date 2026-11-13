@@ -15,7 +15,10 @@ import com.orbit.wellness.domain.checkin.PersonalSemanticOccurrenceProjection
 import com.orbit.wellness.domain.checkin.DistributionalContextDataset
 import com.orbit.wellness.domain.checkin.JointEmbeddingDataset
 import com.orbit.wellness.domain.checkin.MaskedConceptReconstructionDataset
+import com.orbit.wellness.domain.checkin.RegionDescriptionDataset
+import com.orbit.wellness.domain.checkin.SemanticAtlasDataset
 import com.orbit.wellness.domain.checkin.SemanticNullComparisonDataset
+import com.orbit.wellness.domain.checkin.StateGroupAtlasDataset
 import com.orbit.wellness.domain.checkin.ReciprocalSignatureDataset
 import com.orbit.wellness.domain.checkin.StateShapeDiagnosticDataset
 import com.orbit.wellness.domain.checkin.StateShapeEvidenceDataset
@@ -40,6 +43,9 @@ sealed interface WalkForwardUiState {
         val signatures: ReciprocalSignatureDataset,
         val embedding: JointEmbeddingDataset,
         val distributional: DistributionalContextDataset,
+        val atlas: SemanticAtlasDataset,
+        val stateGroups: StateGroupAtlasDataset,
+        val regions: RegionDescriptionDataset,
         val reconstruction: MaskedConceptReconstructionDataset,
         val semanticNull: SemanticNullComparisonDataset,
     ) : WalkForwardUiState
@@ -77,6 +83,9 @@ class WalkForwardViewModel(
                 signatures = snapshot.signatures,
                 embedding = snapshot.embedding,
                 distributional = snapshot.distributional,
+                atlas = snapshot.atlas,
+                stateGroups = snapshot.stateGroups,
+                regions = snapshot.regions,
                 reconstruction = snapshot.reconstruction,
                 semanticNull = snapshot.semanticNull,
             )

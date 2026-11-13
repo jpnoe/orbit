@@ -23,7 +23,13 @@ import com.orbit.wellness.domain.checkin.SemanticNullComparisonDataset
 import com.orbit.wellness.domain.checkin.evaluateMaskedConceptReconstruction
 import com.orbit.wellness.domain.checkin.evaluateWalkForwardSemanticNullComparison
 import com.orbit.wellness.domain.checkin.projectNullTrajectoryLearner
+import com.orbit.wellness.domain.checkin.SemanticAtlasDataset
+import com.orbit.wellness.domain.checkin.RegionDescriptionDataset
+import com.orbit.wellness.domain.checkin.StateGroupAtlasDataset
+import com.orbit.wellness.domain.checkin.describePersonalSemanticRegions
 import com.orbit.wellness.domain.checkin.projectDistributionalContext
+import com.orbit.wellness.domain.checkin.projectPersonalSemanticAtlas
+import com.orbit.wellness.domain.checkin.projectPersonalSemanticStateGroupAtlas
 import com.orbit.wellness.domain.checkin.projectJointSemanticEmbedding
 import com.orbit.wellness.domain.checkin.projectReciprocalSignatures
 import com.orbit.wellness.domain.checkin.retrospectiveVocabulary
@@ -55,6 +61,9 @@ data class PredictionLabSnapshot(
     val signatures: ReciprocalSignatureDataset,
     val embedding: JointEmbeddingDataset,
     val distributional: DistributionalContextDataset,
+    val atlas: SemanticAtlasDataset,
+    val stateGroups: StateGroupAtlasDataset,
+    val regions: RegionDescriptionDataset,
     val reconstruction: MaskedConceptReconstructionDataset,
     val semanticNull: SemanticNullComparisonDataset,
 ) {
@@ -116,6 +125,12 @@ fun observeWalkForward(
             )
             val evidence = projectRetrospectiveMultiscaleBidirectionalEvidence(snapshot.dataset, zone)
             val diagnostics = projectRetrospectiveStateShapeDiagnostics(snapshot.dataset, evidence)
+            val stateGroups = projectPersonalSemanticStateGroupAtlas(
+                embedding = embedding,
+                distributional = distributional,
+                graph = graph,
+                projection = occurrences,
+            )
             PredictionLabSnapshot(
                 examples = examples,
                 neighborhoods = projectCausalPredecessorNeighborhood(snapshot.dataset, zone),
@@ -127,6 +142,20 @@ fun observeWalkForward(
                 signatures = signatures,
                 embedding = embedding,
                 distributional = distributional,
+                atlas = projectPersonalSemanticAtlas(
+                    embedding = embedding,
+                    distributional = distributional,
+                    graph = graph,
+                    projection = occurrences,
+                ),
+                stateGroups = stateGroups,
+                regions = describePersonalSemanticRegions(
+                    atlas = stateGroups,
+                    embedding = embedding,
+                    distributional = distributional,
+                    graph = graph,
+                    projection = occurrences,
+                ),
                 reconstruction = evaluateMaskedConceptReconstruction(
                     projection = occurrences,
                     graph = graph,

@@ -41,6 +41,9 @@ import com.orbit.wellness.domain.checkin.RetrospectiveSuccessorNeighborhoodDatas
 import com.orbit.wellness.domain.checkin.DistributionalContextDataset
 import com.orbit.wellness.domain.checkin.JointEmbeddingDataset
 import com.orbit.wellness.domain.checkin.MaskedConceptReconstructionDataset
+import com.orbit.wellness.domain.checkin.RegionDescriptionDataset
+import com.orbit.wellness.domain.checkin.SemanticAtlasDataset
+import com.orbit.wellness.domain.checkin.StateGroupAtlasDataset
 import com.orbit.wellness.domain.checkin.SemanticNullComparisonDataset
 import com.orbit.wellness.domain.checkin.PersonalSemanticOccurrenceProjection
 import com.orbit.wellness.domain.checkin.ReciprocalSignatureDataset
@@ -142,6 +145,9 @@ fun PredictionResearchPane(walkForwardViewModel: WalkForwardViewModel) {
             signatures = state.signatures,
             embedding = state.embedding,
             distributional = state.distributional,
+            atlas = state.atlas,
+            stateGroups = state.stateGroups,
+            regions = state.regions,
             reconstruction = state.reconstruction,
             semanticNull = state.semanticNull,
             modifier = Modifier.fillMaxWidth(),
@@ -161,6 +167,9 @@ private fun PredictionLab(
     signatures: ReciprocalSignatureDataset,
     embedding: JointEmbeddingDataset,
     distributional: DistributionalContextDataset,
+    atlas: SemanticAtlasDataset,
+    stateGroups: StateGroupAtlasDataset,
+    regions: RegionDescriptionDataset,
     reconstruction: MaskedConceptReconstructionDataset,
     semanticNull: SemanticNullComparisonDataset,
     modifier: Modifier = Modifier,
@@ -195,6 +204,9 @@ private fun PredictionLab(
                 signatures,
                 embedding,
                 distributional,
+                atlas,
+                stateGroups,
+                regions,
                 reconstruction,
                 semanticNull,
             )
@@ -219,6 +231,9 @@ private fun RecordedReplayPane(
     signatures: ReciprocalSignatureDataset,
     embedding: JointEmbeddingDataset,
     distributional: DistributionalContextDataset,
+    atlas: SemanticAtlasDataset,
+    stateGroups: StateGroupAtlasDataset,
+    regions: RegionDescriptionDataset,
     reconstruction: MaskedConceptReconstructionDataset,
     semanticNull: SemanticNullComparisonDataset,
 ) {
@@ -247,6 +262,7 @@ private fun RecordedReplayPane(
             ReciprocalSignatureSection(signatures, attempt.anchorKey.raw, attempt.transitionId)
             JointEmbeddingSection(embedding, attempt.anchorKey.raw)
             DistributionalContextSection(distributional, embedding.audit, attempt.anchorKey.raw)
+            SemanticAtlasSection(atlas, stateGroups, regions)
             MaskedConceptReconstructionSection(reconstruction)
             SemanticNullComparisonSection(semanticNull)
             CausalPreparationSection(bundle, attempt.transitionId)
